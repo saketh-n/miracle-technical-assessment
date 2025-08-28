@@ -11,6 +11,9 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Global configuration
+NUM_TRIALS = 500
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -30,7 +33,7 @@ app.add_middleware(
 CLINICALTRIALS_CACHE = Path("data/clinicaltrials_cache.json")
 EUDRACT_CACHE = Path("data/eudract_data.json")
 
-def fetch_clinicaltrials_data(limit=500):
+def fetch_clinicaltrials_data(limit=NUM_TRIALS):
     """Fetch data from ClinicalTrials.gov API and cache it."""
     try:
         url = "https://clinicaltrials.gov/api/v2/studies"
@@ -126,8 +129,8 @@ def parse_eudract_text(text):
     
     return trials
 
-def fetch_eudract_data(limit=500, batch_size=5):
-    """Spoof EudraCT download: Fetch and parse full details for 500 trials, resumable."""
+def fetch_eudract_data(limit=NUM_TRIALS, batch_size=5, start_page=1):
+    """Spoof EudraCT download: Fetch and parse full details for {NUM_TRIALS} trials, resumable."""
     try:
         trials_per_page = 20
         total_pages_needed = (limit + trials_per_page - 1) // trials_per_page
@@ -146,13 +149,13 @@ def fetch_eudract_data(limit=500, batch_size=5):
                 logger.error(f"Error reading EudraCT cache: {e}")
                 existing_trials = []
         
-        start_page = (len(existing_trials) // trials_per_page) + 1
-        remaining_trials_needed = limit - len(existing_trials)
-        remaining_pages_needed = (remaining_trials_needed + trials_per_page - 1) // trials_per_page
-        
-        if remaining_trials_needed <= 0:
+        if len(existing_trials) >= limit:
             logger.info("Cache already has sufficient trials; no fetch needed")
             return {"data": {"studies": existing_trials[:limit]}, "last_updated": last_updated}
+        
+        remaining_trials_needed = limit - len(existing_trials)
+        remaining_pages_needed = (remaining_trials_needed + trials_per_page - 1) // trials_per_page
+        start_page = max(start_page, (len(existing_trials) // trials_per_page) + 1)
         
         logger.info(f"Resuming EudraCT fetch from page {start_page}; need {remaining_pages_needed} more pages")
 
@@ -194,7 +197,7 @@ def fetch_eudract_data(limit=500, batch_size=5):
                 time.sleep(3)  # Batch-level delay to avoid rate limiting
         
         logger.info(f"Fetched and cached {len(all_new_trials)} new EudraCT records (total: {len(existing_trials)})")
-        return {"data": {"studies": existing_trials[:limit]}, "last_updated": datetime.utcnow().isoformat()}
+        return {"data": {"studies": existing_trials[:limit]}, "last_updated": last_updated}
     except Exception as e:
         logger.error(f"Error fetching EudraCT data: {e}")
         return {"error": str(e), "data": None, "last_updated": datetime.utcnow().isoformat()}
@@ -207,11 +210,11 @@ def load_eudract_data():
             result = fetch_eudract_data()
             if result.get("error"):
                 raise HTTPException(status_code=500, detail=result["error"])
-            return result["data"]["studies"][:500]
+            return result["data"]["studies"][:NUM_TRIALS]
         with open(EUDRACT_CACHE, "r") as f:
             data = json.load(f)
         logger.info(f"Loaded {len(data.get('data', {}).get('studies', []))} EudraCT records")
-        return data["data"]["studies"][:500]
+        return data["data"]["studies"][:NUM_TRIALS]
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding EudraCT JSON: {e}")
         raise HTTPException(status_code=500, detail="Invalid EudraCT data format")
@@ -234,16 +237,28 @@ async def startup_event():
             scheduler.start()
             logger.info("Scheduler started for ClinicalTrials.gov data refresh every 24 hours")
         
-        # Fetch EudraCT if cache missing
-        if not EUDRACT_CACHE.exists():
-            logger.info("EudraCT cache missing, starting fetch")
-            result_eu = fetch_eudract_data()
+        # Fetch EudraCT if cache missing or incomplete
+        logger.info("Checking EudraCT cache")
+        existing_trials = []
+        if EUDRACT_CACHE.exists():
+            try:
+                with open(EUDRACT_CACHE, "r") as f:
+                    cache_data = json.load(f)
+                    existing_trials = cache_data.get("data", {}).get("studies", [])
+                logger.info(f"EudraCT cache found with {len(existing_trials)} trials")
+            except json.JSONDecodeError as e:
+                logger.error(f"Error reading EudraCT cache: {e}")
+                existing_trials = []
+        
+        if len(existing_trials) < NUM_TRIALS:
+            logger.info(f"EudraCT cache incomplete ({len(existing_trials)} trials), starting fetch from page {(len(existing_trials) // 20) + 1}")
+            result_eu = fetch_eudract_data(limit=NUM_TRIALS, start_page=(len(existing_trials) // 20) + 1)
             if result_eu.get("error"):
                 logger.warning("Initial EudraCT fetch failed, but server will continue")
             else:
                 logger.info("EudraCT fetch completed successfully")
         else:
-            logger.info("EudraCT cache found, skipping fetch")
+            logger.info("EudraCT cache has sufficient trials, skipping fetch")
     except Exception as e:
         logger.error(f"Startup error: {e}")
         logger.warning("Continuing server startup despite data fetch error")
