@@ -336,23 +336,32 @@ async def get_by_condition():
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
         
-        # ClinicalTrials.gov conditions (list of lists)
-        ct_conditions = pd.DataFrame([
-            {"Condition": cond for cond in study.get("protocolSection", {})
-                .get("conditionsModule", {}).get("conditions", [])}
-            for study in ct_data
-        ])["Condition"].value_counts().head(10).to_dict()
+        # ClinicalTrials.gov conditions
+        ct_conditions = {}
+        for study in ct_data:
+            conditions = study.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", [])
+            for cond in conditions:
+                if cond and isinstance(cond, str) and cond.strip():  # Ensure valid condition
+                    ct_conditions[cond] = ct_conditions.get(cond, 0) + 1
+        ct_conditions = dict(sorted(ct_conditions.items(), key=lambda x: x[1], reverse=True)[:10])
         
-        # EudraCT conditions (single string per trial)
-        eu_conditions = pd.DataFrame(eu_data)["Medical condition(s) being investigated"].value_counts().head(10).to_dict()
+        # EudraCT conditions
+        eu_conditions = {}
+        for trial in eu_data:
+            condition = trial.get("E.1.1 Medical condition(s) being investigated", None)
+            if condition and isinstance(condition, str) and condition.strip():  # Ensure valid condition
+                eu_conditions[condition] = eu_conditions.get(condition, 0) + 1
+            else:
+                logger.debug(f"Skipping trial {trial.get('EudraCT Number', 'unknown')} due to missing or invalid condition")
+        eu_conditions = dict(sorted(eu_conditions.items(), key=lambda x: x[1], reverse=True)[:10])
         
         return {
             "clinicaltrials_conditions": ct_conditions,
             "eudract_conditions": eu_conditions
         }
     except Exception as e:
-        logger.error(f"Error aggregating by condition: {e}")
-        raise HTTPException(status_code=500, detail="Error aggregating by condition")
+        logger.error(f"Error aggregating by condition: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error aggregating by condition: {str(e)}")
 
 @app.get("/aggregations/by_sponsor")
 async def get_by_sponsor():
@@ -361,22 +370,31 @@ async def get_by_sponsor():
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
         
-        ct_sponsors = pd.DataFrame([
-            {"Sponsor": study.get("protocolSection", {})
-                .get("sponsorCollaboratorsModule", {})
-                .get("leadSponsor", {}).get("name", "Unknown")}
-            for study in ct_data
-        ])["Sponsor"].value_counts().head(10).to_dict()
+        # ClinicalTrials.gov sponsors
+        ct_sponsors = {}
+        for study in ct_data:
+            sponsor = study.get("protocolSection", {}).get("sponsorCollaboratorsModule", {}).get("leadSponsor", {}).get("name", "Unknown")
+            if sponsor and isinstance(sponsor, str) and sponsor.strip():  # Ensure valid sponsor
+                ct_sponsors[sponsor] = ct_sponsors.get(sponsor, 0) + 1
+        ct_sponsors = dict(sorted(ct_sponsors.items(), key=lambda x: x[1], reverse=True)[:10])
         
-        eu_sponsors = pd.DataFrame(eu_data)["Name of Sponsor"].value_counts().head(10).to_dict()
+        # EudraCT sponsors
+        eu_sponsors = {}
+        for trial in eu_data:
+            sponsor = trial.get("B.1.1 Name of Sponsor", "Unknown")
+            if sponsor and isinstance(sponsor, str) and sponsor.strip():  # Ensure valid sponsor
+                eu_sponsors[sponsor] = eu_sponsors.get(sponsor, 0) + 1
+            else:
+                logger.debug(f"Skipping trial {trial.get('EudraCT Number', 'unknown')} due to missing or invalid sponsor")
+        eu_sponsors = dict(sorted(eu_sponsors.items(), key=lambda x: x[1], reverse=True)[:10])
         
         return {
             "clinicaltrials_sponsors": ct_sponsors,
             "eudract_sponsors": eu_sponsors
         }
     except Exception as e:
-        logger.error(f"Error aggregating by sponsor: {e}")
-        raise HTTPException(status_code=500, detail="Error aggregating by sponsor")
+        logger.error(f"Error aggregating by sponsor: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error aggregating by sponsor: {str(e)}")
 
 @app.get("/aggregations/enrollment_by_region")
 async def get_enrollment_by_region():

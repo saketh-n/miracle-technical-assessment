@@ -1,29 +1,61 @@
-import React from 'react';
+import React, { useEffect, useState, Component } from 'react';
+import type { ReactNode } from 'react';
 import { useFontSize } from '../context/FontSizeContext';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 
-// Placeholder data for charts
-const placeholderData = [
-  { name: 'US', value: 400 },
-  { name: 'EU', value: 300 },
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#a4de6c', '#d0ed57'];
+
+// Dummy data for placeholder charts
+const dummyLineData = [
+  { year: '2020', trials: 200 },
+  { year: '2021', trials: 300 },
+  { year: '2022', trials: 400 },
+  { year: '2023', trials: 350 },
+  { year: '2024', trials: 500 },
+];
+const dummyPieData = [
+  { name: 'Cancer', value: 400 },
+  { name: 'Cardiology', value: 300 },
+  { name: 'Neurology', value: 200 },
+  { name: 'Other', value: 100 },
+];
+const dummyBarData = [
+  { name: 'US', trials: 400 },
+  { name: 'EU', trials: 300 },
 ];
 
-const sponsorData = [
-  { name: 'Sponsor A', trials: 120 },
-  { name: 'Sponsor B', trials: 100 },
-  { name: 'Sponsor C', trials: 80 },
-  { name: 'Sponsor D', trials: 60 },
-  { name: 'Sponsor E', trials: 40 },
-];
+// Error Boundary Component
+interface ChartErrorBoundaryProps {
+  chartId: string;
+  children: ReactNode;
+}
 
-const conditionData = [
-  { name: 'Cancer', value: 200 },
-  { name: 'Cardiology', value: 150 },
-  { name: 'Neurology', value: 100 },
-  { name: 'Other', value: 50 },
-];
+interface ChartErrorBoundaryState {
+  hasError: boolean;
+  errorMessage: string;
+}
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042'];
+class ChartErrorBoundary extends Component<ChartErrorBoundaryProps, ChartErrorBoundaryState> {
+  state: ChartErrorBoundaryState = {
+    hasError: false,
+    errorMessage: '',
+  };
+
+  static getDerivedStateFromError(error: Error): ChartErrorBoundaryState {
+    return { hasError: true, errorMessage: error.message };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="text-center text-red-600 p-4">
+          Error in chart {this.props.chartId}: {this.state.errorMessage}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const Charts: React.FC = () => {
   const { fontSize } = useFontSize();
@@ -31,180 +63,229 @@ const Charts: React.FC = () => {
   const getFontSizeClasses = () => {
     if (fontSize === 'large') {
       return {
-        title: 'text-3xl',
+        title: 'text-4xl',
         subtitle: 'text-xl',
-        chartTitle: 'text-lg',
+        chartLabel: 'text-base',
       };
     }
     return {
-      title: 'text-2xl',
+      title: 'text-3xl',
       subtitle: 'text-lg',
-      chartTitle: 'text-base',
+      chartLabel: 'text-sm',
     };
   };
 
-  const { title, subtitle, chartTitle } = getFontSizeClasses();
+  const { title, subtitle, chartLabel } = getFontSizeClasses();
+
+  const [totals, setTotals] = useState<{ clinicaltrials_total: number; eudract_total: number } | null>(null);
+  const [conditions, setConditions] = useState<{ clinicaltrials_conditions: Record<string, number>; eudract_conditions: Record<string, number> } | null>(null);
+  const [sponsors, setSponsors] = useState<{ clinicaltrials_sponsors: Record<string, number>; eudract_sponsors: Record<string, number> } | null>(null);
+  const [enrollment, setEnrollment] = useState<{ clinicaltrials_enrollment: Record<string, number>; eudract_enrollment: Record<string, number> } | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const fetchAggregations = async () => {
+      try {
+        const totalsRes = await fetch('http://localhost:8000/aggregations/totals');
+        if (!totalsRes.ok) throw new Error('Failed to fetch totals');
+        setTotals(await totalsRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, totals: error.message }));
+      }
+
+      try {
+        const conditionsRes = await fetch('http://localhost:8000/aggregations/by_condition');
+        if (!conditionsRes.ok) throw new Error('Failed to fetch conditions');
+        setConditions(await conditionsRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, conditions: error.message }));
+      }
+
+      try {
+        const sponsorsRes = await fetch('http://localhost:8000/aggregations/by_sponsor');
+        if (!sponsorsRes.ok) throw new Error('Failed to fetch sponsors');
+        setSponsors(await sponsorsRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, sponsors: error.message }));
+      }
+
+      try {
+        const enrollmentRes = await fetch('http://localhost:8000/aggregations/enrollment_by_region');
+        if (!enrollmentRes.ok) throw new Error('Failed to fetch enrollment');
+        setEnrollment(await enrollmentRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, enrollment: error.message }));
+      }
+    };
+
+    fetchAggregations();
+  }, []);
+
+  // Combined top sponsors
+  const topCombinedSponsors = sponsors
+    ? Object.entries(
+        Object.entries({
+          ...sponsors.clinicaltrials_sponsors,
+          ...sponsors.eudract_sponsors,
+        }).reduce((acc, [sponsor, count]) => {
+          acc[sponsor] = (acc[sponsor] || 0) + count;
+          return acc;
+        }, {} as Record<string, number>)
+      )
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, value]) => ({ name, value }))
+    : [];
+
+    const chartConfigs = [
+        {
+          id: 'chart1',
+          title: 'Total Clinical Trials (ClinicalTrials.gov vs EudraCT)',
+          type: 'bar',
+          dataKey: 'totals',
+          getData: () =>
+            totals ? [{ name: 'ClinicalTrials.gov', value: totals.clinicaltrials_total }, { name: 'EudraCT', value: totals.eudract_total }] : [],
+        },
+        {
+          id: 'chart2',
+          title: 'Trials by Condition [Top 10] (ClinicalTrials.gov)',
+          type: 'pie',
+          dataKey: 'conditions_us',
+          getData: () =>
+            conditions ? Object.entries(conditions.clinicaltrials_conditions).map(([name, value]) => ({ name, value })) : [],
+        },
+        {
+          id: 'chart3',
+          title: 'Trials by Condition [Top 10] (EudraCT)',
+          type: 'pie',
+          dataKey: 'conditions_eu',
+          getData: () =>
+            conditions ? Object.entries(conditions.eudract_conditions).map(([name, value]) => ({ name, value })) : [],
+        },
+        {
+          id: 'chart4',
+          title: 'Trials by Sponsor (ClinicalTrials.gov)',
+          type: 'bar',
+          dataKey: 'sponsors_us',
+          getData: () =>
+            sponsors ? Object.entries(sponsors.clinicaltrials_sponsors).map(([name, value]) => ({ name, value })) : [],
+        },
+        {
+          id: 'chart5',
+          title: 'Trials by Sponsor (EudraCT)',
+          type: 'bar',
+          dataKey: 'sponsors_eu',
+          getData: () =>
+            sponsors ? Object.entries(sponsors.eudract_sponsors).map(([name, value]) => ({ name, value })) : [],
+        },
+        {
+          id: 'chart6',
+          title: 'Top 10 Sponsors (Combined)',
+          type: 'bar',
+          dataKey: 'top_sponsors',
+          getData: () => topCombinedSponsors,
+        },
+        {
+          id: 'chart7',
+          title: 'Enrollment by Region (ClinicalTrials.gov)',
+          type: 'pie',
+          dataKey: 'enrollment_us',
+          getData: () =>
+            enrollment
+              ? Object.entries(enrollment.clinicaltrials_enrollment)
+                  .filter(([_, value]) => value > 0)
+                  .map(([name, value]) => ({ name, value }))
+              : [],
+        },
+        {
+          id: 'chart8',
+          title: 'Enrollment by Region (EudraCT)',
+          type: 'pie',
+          dataKey: 'enrollment_eu',
+          getData: () =>
+            enrollment
+              ? Object.entries(enrollment.eudract_enrollment)
+                  .filter(([_, value]) => value > 0)
+                  .map(([name, value]) => ({ name, value }))
+              : [],
+        },
+        { id: 'chart9', title: 'Trials Over Time', type: 'line', dataKey: 'dummy_time', getData: () => dummyLineData },
+        { id: 'chart10', title: 'Trial Phases', type: 'pie', dataKey: 'dummy_phases', getData: () => dummyPieData },
+        { id: 'chart11', title: 'Trial Status', type: 'pie', dataKey: 'dummy_status', getData: () => dummyPieData },
+        { id: 'chart12', title: 'Funding Sources', type: 'pie', dataKey: 'dummy_funding', getData: () => dummyPieData },
+        { id: 'chart13', title: 'Trial Locations', type: 'bar', dataKey: 'dummy_locations', getData: () => dummyBarData },
+      ];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 py-12 px-6">
       <div className="max-w-7xl mx-auto">
-        <h1 className={`${title} font-bold text-gray-900 mb-4 text-center`}>
-          Clinical Trials Chart Catalog
+        <h1 className={`${title} font-bold text-gray-900 mb-6 text-center`}>
+          Clinical Trial Charts
         </h1>
         <p className={`${subtitle} text-gray-600 mb-12 text-center`}>
-          Explore various charts representing clinical trials data
+          Explore trends and insights from clinical trial data
         </p>
-
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {/* Chart 1: Total Trials US vs EU */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Total Trials: US vs EU</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={placeholderData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} fill="#8884d8">
-                  {placeholderData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 2: Trials by Condition */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Trials by Condition</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={conditionData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} fill="#82ca9d">
-                  {conditionData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 3: Trials by Sponsor */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Trials by Sponsor</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={sponsorData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="trials" fill="#8884d8" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 4: Top 10 Sponsors */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Top 10 Sponsors</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={sponsorData.slice(0, 5)}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="trials" fill="#82ca9d" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 5: Enrollment by Region */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Enrollment by Region</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={placeholderData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} fill="#ff7300">
-                  {placeholderData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 6: Placeholder Chart */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Trial Phases</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={sponsorData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="trials" fill="#ff7300" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 7: Placeholder Chart */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Trial Status</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={conditionData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} fill="#0088FE">
-                  {conditionData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 8: Placeholder Chart */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Trial Duration</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={sponsorData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="trials" fill="#00C49F" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 9: Placeholder Chart */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Funding Sources</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={placeholderData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} fill="#FFBB28">
-                  {placeholderData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 10: Placeholder Chart */}
-          <div className="bg-white/30 backdrop-blur-md rounded-3xl p-6 border border-white/50 shadow-xl">
-            <h3 className={`${chartTitle} font-semibold mb-4`}>Trial Locations</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={sponsorData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="trials" fill="#FF8042" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {chartConfigs.map((chart) => {
+            const chartData = chart.getData();
+            const error = errors[chart.dataKey];
+            return (
+              <ChartErrorBoundary key={chart.id} chartId={chart.id}>
+                <div className="bg-white/80 backdrop-blur-md rounded-2xl p-6 border border-white/50 shadow-lg hover:shadow-xl transition-all duration-200">
+                  <h2 className={`${chartLabel} font-semibold text-gray-800 mb-4`}>
+                    {chart.title}
+                  </h2>
+                  {error ? (
+                    <div className="text-center text-red-600">Error: {error}</div>
+                  ) : chartData.length === 0 ? (
+                    <div className="text-center text-gray-500">Loading...</div>
+                  ) : (
+                    <>
+                      {chart.type === 'bar' && (
+                        <BarChart width={350} height={250} data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" angle={-45} textAnchor="end" height={60} />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey={chart.dataKey.startsWith('dummy') ? 'trials' : 'value'} fill="#0088FE" />
+                        </BarChart>
+                      )}
+                      {chart.type === 'pie' && (
+                        <PieChart width={350} height={250}>
+                          <Pie
+                            data={chartData}
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={100}
+                            fill="#8884d8"
+                            dataKey={chart.dataKey.startsWith('dummy') ? 'value' : 'value'}
+                            label
+                          >
+                            {chartData.map((_, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip />
+                          <Legend />
+                        </PieChart>
+                      )}
+                      {chart.type === 'line' && (
+                        <LineChart width={350} height={250} data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="year" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Line type="monotone" dataKey="trials" stroke="#0088FE" />
+                        </LineChart>
+                      )}
+                    </>
+                  )}
+                </div>
+              </ChartErrorBoundary>
+            );
+          })}
         </div>
       </div>
     </div>
