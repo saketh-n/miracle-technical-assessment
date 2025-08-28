@@ -9,9 +9,10 @@ from datetime import datetime
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -65,60 +66,28 @@ def fetch_clinicaltrials_data(limit=500):
         logger.error(f"Error fetching ClinicalTrials.gov data: {e}")
         return {"error": str(e), "data": None, "last_updated": datetime.utcnow().isoformat()}
 
-def fetch_eudract_data(limit=500, pages_to_fetch=None):
-    """Spoof EudraCT download: Fetch and parse full details for 500 trials."""
+def fetch_eudract_page(page, session):
+    """Fetch and parse a single EudraCT page."""
     try:
-        trials = []
-        trials_per_page = 20
-        num_pages = pages_to_fetch or (limit // trials_per_page) + 1 if limit % trials_per_page else limit // trials_per_page
+        # Load search page to get session cookies
+        search_url = f"https://www.clinicaltrialsregister.eu/ctr-search/search?query=&page={page}"
+        search_response = session.get(search_url, timeout=10)
+        search_response.raise_for_status()
+        logger.info(f"Loaded search page {page}: Status {search_response.status_code}")
+
+        # Download full details for current page
+        download_url = "https://www.clinicaltrialsregister.eu/ctr-search/rest/download/full?query=&mode=current_page"
+        download_response = session.get(download_url, timeout=10)
+        download_response.raise_for_status()
+        text = download_response.text
         
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.clinicaltrialsregister.eu/ctr-search/search',
-        })
-
-        for page in range(1, num_pages + 1):
-            # Load search page to get session cookies
-            search_url = f"https://www.clinicaltrialsregister.eu/ctr-search/search?query=&page={page}"
-            search_response = session.get(search_url, timeout=10)
-            search_response.raise_for_status()
-            logger.info(f"Loaded search page {page}: Status {search_response.status_code}")
-
-            # Download full details for current page
-            download_url = "https://www.clinicaltrialsregister.eu/ctr-search/rest/download/full?query=&mode=current_page"
-            download_response = session.get(download_url, timeout=10)
-            download_response.raise_for_status()
-            text = download_response.text
-            
-            # Parse text into trials
-            page_trials = parse_eudract_text(text)
-            trials.extend(page_trials)
-            logger.info(f"Fetched {len(page_trials)} trials from page {page} (total so far: {len(trials)})")
-
-            if len(trials) >= limit:
-                trials = trials[:limit]
-                break
-
-            time.sleep(3)  # Rate limit to avoid bans
-
-        # Ensure data directory exists
-        EUDRACT_CACHE.parent.mkdir(exist_ok=True)
-        
-        # Save to cache with timestamp
-        data_with_timestamp = {
-            "data": {"studies": trials},
-            "last_updated": datetime.utcnow().isoformat()
-        }
-        with open(EUDRACT_CACHE, "w") as f:
-            json.dump(data_with_timestamp, f)
-        logger.info(f"Fetched and cached {len(trials)} EudraCT records")
-        return data_with_timestamp
-    except requests.RequestException as e:
-        logger.error(f"Error fetching EudraCT data: {e}")
-        return {"error": str(e), "data": None, "last_updated": datetime.utcnow().isoformat()}
+        # Parse text into trials
+        page_trials = parse_eudract_text(text)
+        logger.info(f"Fetched {len(page_trials)} trials from page {page}")
+        return page_trials
+    except Exception as e:
+        logger.error(f"Error fetching EudraCT page {page}: {e}")
+        return []
 
 def parse_eudract_text(text):
     """Parse EudraCT text download into list of trial dicts."""
@@ -133,7 +102,15 @@ def parse_eudract_text(text):
             if current_trial:
                 trials.append(current_trial)
             current_trial = {"EudraCT Number": line.split(":", 1)[1].strip()}
-        elif line.startswith("Summary") or line in ["A. Protocol Information", "B. Sponsor Information", "D. IMP Identification", "E. General Information on the Trial", "F. Population of Trial Subjects", "N. Review by the Competent Authority or Ethics Committee in the country concerned", "P. End of Trial"]:
+        elif line.startswith("Summary") or line in [
+            "A. Protocol Information",
+            "B. Sponsor Information",
+            "D. IMP Identification",
+            "E. General Information on the Trial",
+            "F. Population of Trial Subjects",
+            "N. Review by the Competent Authority or Ethics Committee in the country concerned",
+            "P. End of Trial"
+        ]:
             current_section = line
         elif line and ':' in line:
             key, value = line.split(":", 1)
@@ -149,11 +126,84 @@ def parse_eudract_text(text):
     
     return trials
 
+def fetch_eudract_data(limit=500, batch_size=5):
+    """Spoof EudraCT download: Fetch and parse full details for 500 trials, resumable."""
+    try:
+        trials_per_page = 20
+        total_pages_needed = (limit + trials_per_page - 1) // trials_per_page
+        
+        # Load existing cache to resume
+        existing_trials = []
+        last_updated = datetime.utcnow().isoformat()
+        if EUDRACT_CACHE.exists():
+            try:
+                with open(EUDRACT_CACHE, "r") as f:
+                    cache_data = json.load(f)
+                    existing_trials = cache_data.get("data", {}).get("studies", [])
+                    last_updated = cache_data.get("last_updated", last_updated)
+                logger.info(f"Loaded {len(existing_trials)} existing EudraCT trials from cache")
+            except json.JSONDecodeError as e:
+                logger.error(f"Error reading EudraCT cache: {e}")
+                existing_trials = []
+        
+        start_page = (len(existing_trials) // trials_per_page) + 1
+        remaining_trials_needed = limit - len(existing_trials)
+        remaining_pages_needed = (remaining_trials_needed + trials_per_page - 1) // trials_per_page
+        
+        if remaining_trials_needed <= 0:
+            logger.info("Cache already has sufficient trials; no fetch needed")
+            return {"data": {"studies": existing_trials[:limit]}, "last_updated": last_updated}
+        
+        logger.info(f"Resuming EudraCT fetch from page {start_page}; need {remaining_pages_needed} more pages")
+
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.clinicaltrialsregister.eu/ctr-search/search',
+        })
+
+        all_new_trials = []
+        with ThreadPoolExecutor(max_workers=batch_size) as executor:
+            for batch_start in range(0, remaining_pages_needed, batch_size):
+                batch_end = min(batch_start + batch_size, remaining_pages_needed)
+                batch_pages = list(range(start_page + batch_start, start_page + batch_end))
+                logger.info(f"Fetching batch of pages: {batch_pages}")
+                
+                futures = [executor.submit(fetch_eudract_page, page, session) for page in batch_pages]
+                for future in as_completed(futures):
+                    page_trials = future.result()
+                    all_new_trials.extend(page_trials)
+                    
+                    # Append chunk to cache
+                    existing_trials.extend(page_trials)
+                    EUDRACT_CACHE.parent.mkdir(exist_ok=True)
+                    data_with_timestamp = {
+                        "data": {"studies": existing_trials},
+                        "last_updated": datetime.utcnow().isoformat()
+                    }
+                    with open(EUDRACT_CACHE, "w") as f:
+                        json.dump(data_with_timestamp, f)
+                    logger.info(f"Appended {len(page_trials)} trials to cache (total now: {len(existing_trials)})")
+                
+                if len(existing_trials) >= limit:
+                    existing_trials = existing_trials[:limit]
+                    break
+                
+                time.sleep(3)  # Batch-level delay to avoid rate limiting
+        
+        logger.info(f"Fetched and cached {len(all_new_trials)} new EudraCT records (total: {len(existing_trials)})")
+        return {"data": {"studies": existing_trials[:limit]}, "last_updated": datetime.utcnow().isoformat()}
+    except Exception as e:
+        logger.error(f"Error fetching EudraCT data: {e}")
+        return {"error": str(e), "data": None, "last_updated": datetime.utcnow().isoformat()}
+
 def load_eudract_data():
     """Load EudraCT data from static JSON file."""
     try:
         if not EUDRACT_CACHE.exists():
-            logger.info("EudraCT cache file not found, fetching now")
+            logger.warning("EudraCT cache file not found, fetching now")
             result = fetch_eudract_data()
             if result.get("error"):
                 raise HTTPException(status_code=500, detail=result["error"])
@@ -161,7 +211,7 @@ def load_eudract_data():
         with open(EUDRACT_CACHE, "r") as f:
             data = json.load(f)
         logger.info(f"Loaded {len(data.get('data', {}).get('studies', []))} EudraCT records")
-        return data["data"]["studies"][:500]  # Limit to 500 records
+        return data["data"]["studies"][:500]
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding EudraCT JSON: {e}")
         raise HTTPException(status_code=500, detail="Invalid EudraCT data format")
@@ -171,10 +221,11 @@ scheduler = AsyncIOScheduler()
 
 @app.on_event("startup")
 async def startup_event():
-    """Run initial data fetch for both ClinicalTrials.gov and EudraCT, and start scheduler."""
+    """Run initial data fetch for both ClinicalTrials.gov and EudraCT."""
     logger.info("Starting server and fetching initial data")
     try:
         # Fetch ClinicalTrials.gov
+        logger.info("Starting ClinicalTrials.gov fetch")
         result_ct = fetch_clinicaltrials_data()
         if result_ct.get("error"):
             logger.warning("Initial ClinicalTrials.gov fetch failed, but server will continue")
@@ -185,10 +236,14 @@ async def startup_event():
         
         # Fetch EudraCT if cache missing
         if not EUDRACT_CACHE.exists():
-            logger.info("EudraCT cache missing, fetching now")
+            logger.info("EudraCT cache missing, starting fetch")
             result_eu = fetch_eudract_data()
             if result_eu.get("error"):
                 logger.warning("Initial EudraCT fetch failed, but server will continue")
+            else:
+                logger.info("EudraCT fetch completed successfully")
+        else:
+            logger.info("EudraCT cache found, skipping fetch")
     except Exception as e:
         logger.error(f"Startup error: {e}")
         logger.warning("Continuing server startup despite data fetch error")
@@ -338,7 +393,7 @@ async def get_enrollment_by_region():
         # EudraCT: Assume EU unless marked "Outside EU/EEA"
         eu_enrollment = {"EU": 0, "Others": 0}
         for trial in eu_data:
-            enrollment_str = trial.get("F.4.2.1 In the EEA", "0")  # From trials-full.txt
+            enrollment_str = trial.get("F.4.2.1 In the EEA", "0")
             enrollment = int(enrollment_str) if enrollment_str.isdigit() else 0
             if trial.get("Trial protocol", "").endswith("Outside EU/EEA"):
                 eu_enrollment["Others"] += enrollment
