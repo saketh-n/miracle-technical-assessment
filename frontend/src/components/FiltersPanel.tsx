@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 
 export interface FilterState {
   region: 'ALL' | 'US' | 'EU';
-  condition: string;
+  condition: string[];  // Changed to string[] for multiple conditions
   startDate: Date | null;
   endDate: Date | null;
 }
@@ -80,22 +80,31 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({ filters, onFiltersChange })
   };
 
   const handleConditionInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const value = event.target.value;
-    setSearchTerm(value);
+    setSearchTerm(event.target.value);
     setShowConditionsDropdown(true);
   };
 
   const handleConditionSelect = (condition: string) => {
-    onFiltersChange({
-      ...filters,
-      condition
-    });
-    setSearchTerm(condition);
+    if (!filters.condition.includes(condition)) {
+      onFiltersChange({
+        ...filters,
+        condition: [...filters.condition, condition]
+      });
+    }
+    setSearchTerm('');
     setShowConditionsDropdown(false);
   };
 
+  const handleRemoveCondition = (conditionToRemove: string) => {
+    onFiltersChange({
+      ...filters,
+      condition: filters.condition.filter(c => c !== conditionToRemove)
+    });
+  };
+
   const filteredConditions = conditions.filter(condition =>
-    condition.toLowerCase().includes(searchTerm.toLowerCase())
+    condition.toLowerCase().includes(searchTerm.toLowerCase()) &&
+    !filters.condition.includes(condition)
   );
 
   const handleDateChange = (field: 'startDate' | 'endDate', value: string) => {
@@ -117,7 +126,7 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({ filters, onFiltersChange })
 
   return (
     <div className="bg-white p-4 rounded-lg shadow-sm mb-4">
-      <div className="flex flex-wrap gap-4 items-center">
+      <div className="flex flex-wrap gap-4 items-start">
         {/* Region Selector */}
         <div className="flex-1 min-w-[200px]">
           <select
@@ -132,24 +141,48 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({ filters, onFiltersChange })
         </div>
 
         {/* Condition Search with Dropdown */}
-        <div className="flex-1 min-w-[300px] relative" ref={dropdownRef}>
-          <input
-            type="text"
-            placeholder="Search conditions..."
-            value={searchTerm}
-            onChange={handleConditionInputChange}
-            onFocus={() => setShowConditionsDropdown(true)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-          {showConditionsDropdown && filteredConditions.length > 0 && (
-            <div className="absolute z-10 w-full mt-1 max-h-60 overflow-auto bg-white border border-gray-300 rounded-lg shadow-lg">
-              {filteredConditions.map((condition) => (
+        <div className="flex-1 min-w-[300px]">
+          <div className="relative" ref={dropdownRef}>
+            <input
+              type="text"
+              placeholder={filters.condition.length === 0 ? "All conditions (click to filter)" : "Search conditions..."}
+              value={searchTerm}
+              onChange={handleConditionInputChange}
+              onFocus={() => setShowConditionsDropdown(true)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            {showConditionsDropdown && filteredConditions.length > 0 && (
+              <div className="absolute z-10 w-full mt-1 max-h-60 overflow-auto bg-white border border-gray-300 rounded-lg shadow-lg">
+                {filteredConditions.map((condition) => (
+                  <div
+                    key={condition}
+                    className="px-3 py-2 hover:bg-blue-50 cursor-pointer"
+                    onClick={() => handleConditionSelect(condition)}
+                  >
+                    {condition}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          
+          {/* Selected Conditions */}
+          {filters.condition.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {filters.condition.map((condition) => (
                 <div
                   key={condition}
-                  className="px-3 py-2 hover:bg-blue-50 cursor-pointer"
-                  onClick={() => handleConditionSelect(condition)}
+                  className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full flex items-center gap-2 text-sm"
                 >
-                  {condition}
+                  <span>{condition}</span>
+                  <button
+                    onClick={() => handleRemoveCondition(condition)}
+                    className="hover:text-blue-600 focus:outline-none"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
               ))}
             </div>
