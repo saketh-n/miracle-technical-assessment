@@ -47,3 +47,10 @@ export const updateDashboard = (dashboardId: string, layout: DashboardLayout): v
   dashboards[dashboardId] = layout;
   localStorage.setItem('dashboards', JSON.stringify(dashboards));
 };
+
+// Delete a dashboard by ID
+export const deleteDashboard = (dashboardId: string): void => {
+  const dashboards = getDashboards();
+  delete dashboards[dashboardId];
+  localStorage.setItem('dashboards', JSON.stringify(dashboards));
+};
