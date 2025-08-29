@@ -6,7 +6,15 @@ interface YearsData {
   eudract_years: Record<string, number>;
 }
 
-const YearsChartWidget: React.FC = () => {
+interface YearsChartWidgetProps {
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
+}
+
+const YearsChartWidget: React.FC<YearsChartWidgetProps> = ({
+  showDeleteButton = false,
+  onDelete
+}) => {
   return (
     <BaseChartWidget<YearsData>
       endpoint="http://localhost:8000/aggregations/by_year"
@@ -27,6 +35,8 @@ const YearsChartWidget: React.FC = () => {
             eudract: data.eudract_years[year],
           }))
       }
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };

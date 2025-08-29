@@ -8,9 +8,15 @@ interface SponsorsData {
 
 interface SponsorsChartWidgetProps {
   type: 'clinicaltrials' | 'eudract' | 'combined';
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
 }
 
-const SponsorsChartWidget: React.FC<SponsorsChartWidgetProps> = ({ type }) => {
+const SponsorsChartWidget: React.FC<SponsorsChartWidgetProps> = ({
+  type,
+  showDeleteButton = false,
+  onDelete
+}) => {
   const getTitle = () => {
     switch (type) {
       case 'clinicaltrials':
@@ -61,6 +67,8 @@ const SponsorsChartWidget: React.FC<SponsorsChartWidgetProps> = ({ type }) => {
           .slice(0, 10)
           .map(([name, value]) => ({ name, value }));
       }}
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };

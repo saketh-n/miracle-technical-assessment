@@ -6,7 +6,15 @@ interface DurationsData {
   eudract_durations: Record<string, number>;
 }
 
-const DurationsChartWidget: React.FC = () => {
+interface DurationsChartWidgetProps {
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
+}
+
+const DurationsChartWidget: React.FC<DurationsChartWidgetProps> = ({
+  showDeleteButton = false,
+  onDelete
+}) => {
   return (
     <BaseChartWidget<DurationsData>
       endpoint="http://localhost:8000/aggregations/by_duration"
@@ -25,6 +33,8 @@ const DurationsChartWidget: React.FC = () => {
           eudract: data.eudract_durations[bin],
         }))
       }
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };

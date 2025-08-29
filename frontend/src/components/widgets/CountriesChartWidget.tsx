@@ -5,7 +5,15 @@ interface CountriesData {
   clinicaltrials_countries: Record<string, number>;
 }
 
-const CountriesChartWidget: React.FC = () => {
+interface CountriesChartWidgetProps {
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
+}
+
+const CountriesChartWidget: React.FC<CountriesChartWidgetProps> = ({
+  showDeleteButton = false,
+  onDelete
+}) => {
   return (
     <BaseChartWidget<CountriesData>
       endpoint="http://localhost:8000/aggregations/by_country"
@@ -24,6 +32,8 @@ const CountriesChartWidget: React.FC = () => {
           .slice(0, 10)
           .map(([name, value]) => ({ name, value }))
       }
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };

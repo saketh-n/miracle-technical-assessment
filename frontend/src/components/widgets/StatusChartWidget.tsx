@@ -8,9 +8,15 @@ interface StatusData {
 
 interface StatusChartWidgetProps {
   source: 'clinicaltrials' | 'eudract';
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
 }
 
-const StatusChartWidget: React.FC<StatusChartWidgetProps> = ({ source }) => {
+const StatusChartWidget: React.FC<StatusChartWidgetProps> = ({
+  source,
+  showDeleteButton = false,
+  onDelete
+}) => {
   const sourceName = source === 'clinicaltrials' ? 'ClinicalTrials.gov' : 'EudraCT';
 
   return (
@@ -33,6 +39,8 @@ const StatusChartWidget: React.FC<StatusChartWidgetProps> = ({ source }) => {
           .sort((a, b) => b[1] - a[1])
           .map(([name, value]) => ({ name, value }));
       }}
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };

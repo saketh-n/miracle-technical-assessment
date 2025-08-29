@@ -6,7 +6,15 @@ interface TotalsData {
   eudract_total: number;
 }
 
-const TotalsChartWidget: React.FC = () => {
+interface TotalsChartWidgetProps {
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
+}
+
+const TotalsChartWidget: React.FC<TotalsChartWidgetProps> = ({
+  showDeleteButton = false,
+  onDelete
+}) => {
   return (
     <BaseChartWidget<TotalsData>
       endpoint="http://localhost:8000/aggregations/totals"
@@ -22,6 +30,8 @@ const TotalsChartWidget: React.FC = () => {
         { name: 'ClinicalTrials.gov', value: data.clinicaltrials_total },
         { name: 'EudraCT', value: data.eudract_total }
       ]}
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };

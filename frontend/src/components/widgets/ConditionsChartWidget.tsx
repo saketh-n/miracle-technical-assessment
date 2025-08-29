@@ -8,9 +8,15 @@ interface ConditionsData {
 
 interface ConditionsChartWidgetProps {
   source: 'clinicaltrials' | 'eudract';
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
 }
 
-const ConditionsChartWidget: React.FC<ConditionsChartWidgetProps> = ({ source }) => {
+const ConditionsChartWidget: React.FC<ConditionsChartWidgetProps> = ({
+  source,
+  showDeleteButton = false,
+  onDelete
+}) => {
   const sourceName = source === 'clinicaltrials' ? 'ClinicalTrials.gov' : 'EudraCT';
 
   return (
@@ -34,6 +40,8 @@ const ConditionsChartWidget: React.FC<ConditionsChartWidgetProps> = ({ source })
           .slice(0, 10)
           .map(([name, value]) => ({ name, value }));
       }}
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };

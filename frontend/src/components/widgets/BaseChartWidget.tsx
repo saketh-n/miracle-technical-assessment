@@ -23,6 +23,13 @@ export interface BaseChartWidgetProps<T> {
   transformData: (data: T) => any[];
   className?: string;
   refreshTrigger?: number; // Optional prop to trigger re-fetch
+  showDeleteButton?: boolean; // Whether to show delete button
+  onDelete?: () => void; // Callback when delete button is clicked
+}
+
+export interface DeleteProps {
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
 }
 
 function BaseChartWidget<T extends Record<string, any>>({
@@ -31,7 +38,9 @@ function BaseChartWidget<T extends Record<string, any>>({
   chartConfig,
   transformData,
   className = '',
-  refreshTrigger
+  refreshTrigger,
+  showDeleteButton = false,
+  onDelete
 }: BaseChartWidgetProps<T>) {
   const { fontSize } = useFontSize();
   const [data, setData] = useState<T | null>(null);
@@ -164,10 +173,33 @@ function BaseChartWidget<T extends Record<string, any>>({
   };
 
   return (
-    <div className={`bg-white/80 backdrop-blur-md rounded-2xl p-6 border border-white/50 shadow-lg hover:shadow-xl transition-all duration-200 ${className}`}>
-      <h2 className={`${titleClass} font-semibold text-gray-800 mb-4`}>
-        {title}
-      </h2>
+    <div className={`bg-white/80 backdrop-blur-md rounded-2xl p-6 border border-white/50 shadow-lg hover:shadow-xl transition-all duration-200 ${className} relative`}>
+      <div className="flex justify-between items-start mb-4">
+        <h2 className={`${titleClass} font-semibold text-gray-800 flex-1`}>
+          {title}
+        </h2>
+        {showDeleteButton && onDelete && (
+          <button
+            onClick={onDelete}
+            className="ml-2 p-1.5 rounded-full hover:bg-red-100 text-red-500 hover:text-red-700 transition-colors duration-200"
+            title="Delete widget"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        )}
+      </div>
       {error ? (
         <div className={`text-center text-red-600 ${contentClass}`}>
           Error: {error}

@@ -6,7 +6,15 @@ interface PhasesData {
   eudract_phases: Record<string, number>;
 }
 
-const PhasesChartWidget: React.FC = () => {
+interface PhasesChartWidgetProps {
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
+}
+
+const PhasesChartWidget: React.FC<PhasesChartWidgetProps> = ({
+  showDeleteButton = false,
+  onDelete
+}) => {
   return (
     <BaseChartWidget<PhasesData>
       endpoint="http://localhost:8000/aggregations/by_phase"
@@ -25,6 +33,8 @@ const PhasesChartWidget: React.FC = () => {
           eudract: data.eudract_phases[phase],
         }))
       }
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };

@@ -8,9 +8,15 @@ interface EnrollmentData {
 
 interface EnrollmentChartWidgetProps {
   source: 'clinicaltrials' | 'eudract';
+  showDeleteButton?: boolean;
+  onDelete?: () => void;
 }
 
-const EnrollmentChartWidget: React.FC<EnrollmentChartWidgetProps> = ({ source }) => {
+const EnrollmentChartWidget: React.FC<EnrollmentChartWidgetProps> = ({
+  source,
+  showDeleteButton = false,
+  onDelete
+}) => {
   const sourceName = source === 'clinicaltrials' ? 'ClinicalTrials.gov' : 'EudraCT';
 
   return (
@@ -34,6 +40,8 @@ const EnrollmentChartWidget: React.FC<EnrollmentChartWidgetProps> = ({ source })
           .sort((a, b) => b[1] - a[1])
           .map(([name, value]) => ({ name, value }));
       }}
+      showDeleteButton={showDeleteButton}
+      onDelete={onDelete}
     />
   );
 };
