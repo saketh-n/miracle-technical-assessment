@@ -1,0 +1,10 @@
+export { default as BaseChartWidget } from './BaseChartWidget';
+export { default as TotalsChartWidget } from './TotalsChartWidget';
+export { default as ConditionsChartWidget } from './ConditionsChartWidget';
+export { default as SponsorsChartWidget } from './SponsorsChartWidget';
+export { default as EnrollmentChartWidget } from './EnrollmentChartWidget';
+export { default as StatusChartWidget } from './StatusChartWidget';
+export { default as PhasesChartWidget } from './PhasesChartWidget';
+export { default as YearsChartWidget } from './YearsChartWidget';
+export { default as CountriesChartWidget } from './CountriesChartWidget';
+export { default as DurationsChartWidget } from './DurationsChartWidget';
