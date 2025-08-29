@@ -5,25 +5,6 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, 
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#a4de6c', '#d0ed57'];
 
-// Dummy data for placeholder charts
-const dummyLineData = [
-  { year: '2020', trials: 200 },
-  { year: '2021', trials: 300 },
-  { year: '2022', trials: 400 },
-  { year: '2023', trials: 350 },
-  { year: '2024', trials: 500 },
-];
-const dummyPieData = [
-  { name: 'Cancer', value: 400 },
-  { name: 'Cardiology', value: 300 },
-  { name: 'Neurology', value: 200 },
-  { name: 'Other', value: 100 },
-];
-const dummyBarData = [
-  { name: 'US', trials: 400 },
-  { name: 'EU', trials: 300 },
-];
-
 // Error Boundary Component
 interface ChartErrorBoundaryProps {
   chartId: string;
@@ -81,6 +62,11 @@ const Charts: React.FC = () => {
   const [conditions, setConditions] = useState<{ clinicaltrials_conditions: Record<string, number>; eudract_conditions: Record<string, number> } | null>(null);
   const [sponsors, setSponsors] = useState<{ clinicaltrials_sponsors: Record<string, number>; eudract_sponsors: Record<string, number> } | null>(null);
   const [enrollment, setEnrollment] = useState<{ clinicaltrials_enrollment: Record<string, number>; eudract_enrollment: Record<string, number> } | null>(null);
+  const [statuses, setStatuses] = useState<{ clinicaltrials_statuses: Record<string, number>; eudract_statuses: Record<string, number> } | null>(null);
+  const [phases, setPhases] = useState<{ clinicaltrials_phases: Record<string, number>; eudract_phases: Record<string, number> } | null>(null);
+  const [years, setYears] = useState<{ clinicaltrials_years: Record<string, number>; eudract_years: Record<string, number> } | null>(null);
+  const [countries, setCountries] = useState<{ clinicaltrials_countries: Record<string, number> } | null>(null);
+  const [durations, setDurations] = useState<{ clinicaltrials_durations: Record<string, number>; eudract_durations: Record<string, number> } | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -115,6 +101,46 @@ const Charts: React.FC = () => {
         setEnrollment(await enrollmentRes.json());
       } catch (error) {
         setErrors((prev) => ({ ...prev, enrollment: error.message }));
+      }
+
+      try {
+        const statusRes = await fetch('http://localhost:8000/aggregations/by_status');
+        if (!statusRes.ok) throw new Error('Failed to fetch statuses');
+        setStatuses(await statusRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, statuses: error.message }));
+      }
+
+      try {
+        const phaseRes = await fetch('http://localhost:8000/aggregations/by_phase');
+        if (!phaseRes.ok) throw new Error('Failed to fetch phases');
+        setPhases(await phaseRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, phases: error.message }));
+      }
+
+      try {
+        const yearRes = await fetch('http://localhost:8000/aggregations/by_year');
+        if (!yearRes.ok) throw new Error('Failed to fetch years');
+        setYears(await yearRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, years: error.message }));
+      }
+
+      try {
+        const countryRes = await fetch('http://localhost:8000/aggregations/by_country');
+        if (!countryRes.ok) throw new Error('Failed to fetch countries');
+        setCountries(await countryRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, countries: error.message }));
+      }
+
+      try {
+        const durationRes = await fetch('http://localhost:8000/aggregations/by_duration');
+        if (!durationRes.ok) throw new Error('Failed to fetch durations');
+        setDurations(await durationRes.json());
+      } catch (error) {
+        setErrors((prev) => ({ ...prev, durations: error.message }));
       }
     };
 
@@ -209,11 +235,84 @@ const Charts: React.FC = () => {
                   .map(([name, value]) => ({ name, value }))
               : [],
         },
-        { id: 'chart9', title: 'Trials Over Time', type: 'line', dataKey: 'dummy_time', getData: () => dummyLineData },
-        { id: 'chart10', title: 'Trial Phases', type: 'pie', dataKey: 'dummy_phases', getData: () => dummyPieData },
-        { id: 'chart11', title: 'Trial Status', type: 'pie', dataKey: 'dummy_status', getData: () => dummyPieData },
-        { id: 'chart12', title: 'Funding Sources', type: 'pie', dataKey: 'dummy_funding', getData: () => dummyPieData },
-        { id: 'chart13', title: 'Trial Locations', type: 'bar', dataKey: 'dummy_locations', getData: () => dummyBarData },
+        {
+          id: 'chart9',
+          title: 'Trial Status Distribution (ClinicalTrials.gov)',
+          type: 'pie',
+          dataKey: 'statuses_us',
+          getData: () =>
+            statuses
+              ? Object.entries(statuses.clinicaltrials_statuses).map(([name, value]) => ({
+                  name,
+                  value,
+                }))
+              : [],
+        },
+        {
+          id: 'chart10',
+          title: 'Trial Status Distribution (EudraCT)',
+          type: 'pie',
+          dataKey: 'statuses_eu',
+          getData: () =>
+            statuses
+              ? Object.entries(statuses.eudract_statuses).map(([name, value]) => ({
+                  name,
+                  value,
+                }))
+              : [],
+        },
+        {
+          id: 'chart11',
+          title: 'Trials by Phase (ClinicalTrials.gov vs EudraCT)',
+          type: 'bar',
+          dataKey: 'phases',
+          getData: () =>
+            phases
+              ? Object.keys(phases.clinicaltrials_phases).map((phase) => ({
+                  name: phase,
+                  clinicaltrials: phases.clinicaltrials_phases[phase],
+                  eudract: phases.eudract_phases[phase],
+                }))
+              : [],
+        },
+        {
+          id: 'chart12',
+          title: 'Enrollment Trends Over Time',
+          type: 'line',
+          dataKey: 'years',
+          getData: () =>
+            years
+              ? Object.keys(years.clinicaltrials_years).map((year) => ({
+                  year,
+                  clinicaltrials: years.clinicaltrials_years[year],
+                  eudract: years.eudract_years[year],
+                }))
+              : [],
+        },
+        {
+          id: 'chart13',
+          title: 'Trials by Country [Top 10] (ClinicalTrials.gov)',
+          type: 'bar',
+          dataKey: 'countries',
+          getData: () =>
+            countries
+              ? Object.entries(countries.clinicaltrials_countries).map(([name, value]) => ({ name, value }))
+              : [],
+        },
+        {
+          id: 'chart14',
+          title: 'Trial Duration Distribution (ClinicalTrials.gov vs EudraCT)',
+          type: 'bar',
+          dataKey: 'durations',
+          getData: () =>
+            durations
+              ? Object.keys(durations.clinicaltrials_durations).map((bin) => ({
+                  name: bin,
+                  clinicaltrials: durations.clinicaltrials_durations[bin],
+                  eudract: durations.eudract_durations[bin],
+                }))
+              : [],
+        },
       ];
 
   return (
@@ -241,14 +340,46 @@ const Charts: React.FC = () => {
                     <div className="text-center text-gray-500">Loading...</div>
                   ) : (
                     <>
-                      {chart.type === 'bar' && (
+                      {chart.type === 'bar' && chart.dataKey !== 'phases' && chart.dataKey !== 'durations' && chart.dataKey !== 'countries' && (
                         <BarChart width={350} height={250} data={chartData}>
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="name" angle={-45} textAnchor="end" height={60} />
                           <YAxis />
                           <Tooltip />
                           <Legend />
-                          <Bar dataKey={chart.dataKey.startsWith('dummy') ? 'trials' : 'value'} fill="#0088FE" />
+                          <Bar dataKey="value" fill="#0088FE" />
+                        </BarChart>
+                      )}
+                      {chart.type === 'bar' && chart.dataKey === 'phases' && (
+                        <BarChart width={350} height={250} data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" angle={-45} textAnchor="end" height={60} />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="clinicaltrials" fill="#0088FE" name="ClinicalTrials.gov" />
+                          <Bar dataKey="eudract" fill="#FF8042" name="EudraCT" />
+                        </BarChart>
+                      )}
+                      {chart.type === 'bar' && chart.dataKey === 'durations' && (
+                        <BarChart width={350} height={250} data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" angle={-45} textAnchor="end" height={60} />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="clinicaltrials" fill="#0088FE" name="ClinicalTrials.gov" />
+                          <Bar dataKey="eudract" fill="#FF8042" name="EudraCT" />
+                        </BarChart>
+                      )}
+                      {chart.type === 'bar' && chart.dataKey === 'countries' && (
+                        <BarChart width={350} height={250} data={chartData} layout="vertical">
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis type="number" />
+                          <YAxis dataKey="name" type="category" width={100} />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="value" fill="#0088FE" name="ClinicalTrials.gov" />
                         </BarChart>
                       )}
                       {chart.type === 'pie' && (
@@ -259,7 +390,7 @@ const Charts: React.FC = () => {
                             cy="50%"
                             outerRadius={100}
                             fill="#8884d8"
-                            dataKey={chart.dataKey.startsWith('dummy') ? 'value' : 'value'}
+                            dataKey="value"
                             label
                           >
                             {chartData.map((_, index) => (
@@ -277,7 +408,20 @@ const Charts: React.FC = () => {
                           <YAxis />
                           <Tooltip />
                           <Legend />
-                          <Line type="monotone" dataKey="trials" stroke="#0088FE" />
+                          <Line
+                            type="monotone"
+                            dataKey={chart.dataKey === 'years' ? 'clinicaltrials' : 'trials'}
+                            stroke="#0088FE"
+                            name="ClinicalTrials.gov"
+                          />
+                          {chart.dataKey === 'years' && (
+                            <Line
+                              type="monotone"
+                              dataKey="eudract"
+                              stroke="#FF8042"
+                              name="EudraCT"
+                            />
+                          )}
                         </LineChart>
                       )}
                     </>

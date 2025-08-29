@@ -45,7 +45,10 @@ def fetch_clinicaltrials_data(limit=NUM_TRIALS):
                 "protocolSection.statusModule.overallStatus,"
                 "protocolSection.sponsorCollaboratorsModule.leadSponsor.name,"
                 "protocolSection.designModule.enrollmentInfo.count,"
-                "protocolSection.contactsLocationsModule.locations"
+                "protocolSection.contactsLocationsModule.locations,"
+                "protocolSection.designModule.phases,"
+                "protocolSection.statusModule.startDateStruct,"
+                "protocolSection.statusModule.completionDateStruct"
             )
         }
         logger.info(f"Making request to {url} with params: {params}")
@@ -426,7 +429,7 @@ async def get_enrollment_by_region():
         # EudraCT: Assume EU unless marked "Outside EU/EEA"
         eu_enrollment = {"EU": 0, "Others": 0}
         for trial in eu_data:
-            enrollment_str = trial.get("F.4.2.1 In the EEA", "0")
+            enrollment_str = trial.get("F.4.2.2 In the whole clinical trial", "0")
             enrollment = int(enrollment_str) if enrollment_str.isdigit() else 0
             if trial.get("Trial protocol", "").endswith("Outside EU/EEA"):
                 eu_enrollment["Others"] += enrollment
@@ -440,3 +443,217 @@ async def get_enrollment_by_region():
     except Exception as e:
         logger.error(f"Error aggregating enrollment by region: {e}")
         raise HTTPException(status_code=500, detail="Error aggregating enrollment by region")
+
+@app.get("/aggregations/by_status")
+async def get_by_status():
+    """Aggregate trials by status (Completed, Recruiting, Unknown)."""
+    try:
+        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
+        eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        # ClinicalTrials.gov statuses
+        ct_statuses = {"Completed": 0, "Recruiting": 0, "Unknown": 0}
+        for study in ct_data:
+            status = study.get("protocolSection", {}).get("statusModule", {}).get("overallStatus", "Unknown")
+            if status == "COMPLETED":
+                ct_statuses["Completed"] += 1
+            elif status == "RECRUITING":
+                ct_statuses["Recruiting"] += 1
+            else:
+                ct_statuses["Unknown"] += 1
+        
+        # EudraCT statuses
+        eu_statuses = {}
+        for trial in eu_data:
+            status = trial.get("P. End of Trial Status")
+            if status and isinstance(status, str) and status.strip():
+                eu_statuses[status] = eu_statuses.get(status, 0) + 1;
+        
+        return {
+            "clinicaltrials_statuses": ct_statuses,
+            "eudract_statuses": eu_statuses
+        }
+    except Exception as e:
+        logger.error(f"Error aggregating by status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error aggregating by status: {str(e)}")
+
+@app.get("/aggregations/by_phase")
+async def get_by_phase():
+    """Aggregate trials by phase (I, II, III, IV)."""
+    try:
+        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
+        eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        # ClinicalTrials.gov phases
+        ct_phases = {"Phase I": 0, "Phase II": 0, "Phase III": 0, "Phase IV": 0}
+        for study in ct_data:
+            phases = study.get("protocolSection", {}).get("designModule", {}).get("phases", [])
+            if not isinstance(phases, list):  # Handle unexpected non-array cases
+                phases = [phases] if phases else []
+            for phase in phases:
+                if phase in ["PHASE1", "EARLY_PHASE1"]:
+                    ct_phases["Phase I"] += 1
+                elif phase == "PHASE2":
+                    ct_phases["Phase II"] += 1
+                elif phase == "PHASE3":
+                    ct_phases["Phase III"] += 1
+                elif phase == "PHASE4":
+                    ct_phases["Phase IV"] += 1
+        
+        # EudraCT phases (extract from title)
+        eu_phases = {"Phase I": 0, "Phase II": 0, "Phase III": 0, "Phase IV": 0}
+        phase_pattern = r'(?:phase|Phase)\s*(?:I{1,3}|IV|1(?:/2)?(?:/3)?(?:/4)?|2(?:/3)?(?:/4)?|3(?:/4)?|4)\b'
+        for trial in eu_data:
+            title = trial.get("A.3 Full title of the trial", "")
+            if title and isinstance(title, str):
+                matches = re.findall(phase_pattern, title, re.IGNORECASE)
+                for match in matches:
+                    # Normalize phase mentions to match eu_phases keys
+                    normalized = match.lower()
+                    if any(p in normalized for p in ['i', '1']):
+                        eu_phases["Phase I"] += 1
+                    if any(p in normalized for p in ['ii', '2']):
+                        eu_phases["Phase II"] += 1
+                    if any(p in normalized for p in ['iii', '3']):
+                        eu_phases["Phase III"] += 1
+                    if any(p in normalized for p in ['iv', '4']):
+                        eu_phases["Phase IV"] += 1
+        
+        return {
+            "clinicaltrials_phases": ct_phases,
+            "eudract_phases": eu_phases
+        }
+    except Exception as e:
+        logger.error(f"Error aggregating by phase: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error aggregating by phase: {str(e)}")
+
+@app.get("/aggregations/by_year")
+async def get_by_year():
+    """Aggregate cumulative enrollment by trial start year."""
+    try:
+        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
+        eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        # ClinicalTrials.gov enrollment by year
+        ct_years = {}
+        for study in ct_data:
+            start_date = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
+            enrollment = study.get("protocolSection", {}).get("designModule", {}).get("enrollmentInfo", {}).get("count", 0) or 0
+            if start_date:
+                year = start_date[:4]
+                if year.isdigit():
+                    ct_years[year] = ct_years.get(year, 0) + enrollment
+        
+        # EudraCT enrollment by year
+        eu_years = {}
+        for trial in eu_data:
+            start_date = trial.get("Date on which this record was first entered in the EudraCT database", "")
+            enrollment = int(trial.get("F.4.2.2 In the whole clinical trial", "0")) if trial.get("F.4.2.2 In the whole clinical trial", "0").isdigit() else 0
+            if start_date:
+                try:
+                    year = datetime.strptime(start_date, "%Y-%m-%d").year
+                    eu_years[str(year)] = eu_years.get(str(year), 0) + enrollment
+                except ValueError:
+                    continue
+        
+        # Sort years and prepare data
+        all_years = sorted(set(list(ct_years.keys()) + list(eu_years.keys())))
+        ct_data_sorted = {year: ct_years.get(year, 0) for year in all_years}
+        eu_data_sorted = {year: eu_years.get(year, 0) for year in all_years}
+        
+        return {
+            "clinicaltrials_years": ct_data_sorted,
+            "eudract_years": eu_data_sorted
+        }
+    except Exception as e:
+        logger.error(f"Error aggregating by year: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error aggregating by year: {str(e)}")
+
+@app.get("/aggregations/by_country")
+async def get_by_country():
+    """Aggregate trials by country (top 10) for ClinicalTrials.gov."""
+    try:
+        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
+        ct_countries = {}
+        for study in ct_data:
+            locations = study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", [])
+            for loc in locations:
+                country = loc.get("country", "Unknown")
+                if country and isinstance(country, str) and country.strip():
+                    ct_countries[country] = ct_countries.get(country, 0) + 1
+        ct_countries = dict(sorted(ct_countries.items(), key=lambda x: x[1], reverse=True)[:10])
+        
+        return {"clinicaltrials_countries": ct_countries}
+    except Exception as e:
+        logger.error(f"Error aggregating by country: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error aggregating by country: {str(e)}")
+
+@app.get("/aggregations/by_duration")
+async def get_by_duration():
+    """Aggregate trials by duration bins."""
+    try:
+        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
+        eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        bins = {
+            "<1 year": 0,
+            "1-2 years": 0,
+            "2-3 years": 0,
+            "3-5 years": 0,
+            ">5 years": 0
+        }
+        ct_durations = bins.copy()
+        eu_durations = bins.copy()
+        
+        # ClinicalTrials.gov durations
+        for study in ct_data:
+            start_date = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
+            end_date = study.get("protocolSection", {}).get("statusModule", {}).get("completionDateStruct", {}).get("date", "")
+            if start_date and end_date:
+                try:
+                    start = datetime.strptime(start_date, "%Y-%m-%d")
+                    end = datetime.strptime(end_date, "%Y-%m-%d")
+                    months = (end.year - start.year) * 12 + end.month - start.month
+                    if months < 12:
+                        ct_durations["<1 year"] += 1
+                    elif months < 24:
+                        ct_durations["1-2 years"] += 1
+                    elif months < 36:
+                        ct_durations["2-3 years"] += 1
+                    elif months < 60:
+                        ct_durations["3-5 years"] += 1
+                    else:
+                        ct_durations[">5 years"] += 1
+                except ValueError:
+                    continue
+        
+        # EudraCT durations
+        for trial in eu_data:
+            start_date = trial.get("Date on which this record was first entered in the EudraCT database", "")
+            end_date = trial.get("P. Date of the global end of the trial", "")
+            if start_date and end_date:
+                try:
+                    start = datetime.strptime(start_date, "%Y-%m-%d")
+                    end = datetime.strptime(end_date, "%Y-%m-%d")
+                    months = (end.year - start.year) * 12 + end.month - start.month
+                    if months < 12:
+                        eu_durations["<1 year"] += 1
+                    elif months < 24:
+                        eu_durations["1-2 years"] += 1
+                    elif months < 36:
+                        eu_durations["2-3 years"] += 1
+                    elif months < 60:
+                        eu_durations["3-5 years"] += 1
+                    else:
+                        eu_durations[">5 years"] += 1
+                except ValueError:
+                    continue
+        
+        return {
+            "clinicaltrials_durations": ct_durations,
+            "eudract_durations": eu_durations
+        }
+    except Exception as e:
+        logger.error(f"Error aggregating by duration: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error aggregating by duration: {str(e)}")
+
