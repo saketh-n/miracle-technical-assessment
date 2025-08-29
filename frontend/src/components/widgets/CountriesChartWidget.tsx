@@ -9,12 +9,14 @@ interface CountriesChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const CountriesChartWidget: React.FC<CountriesChartWidgetProps> = ({
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   return (
     <BaseChartWidget<CountriesData>
@@ -35,6 +37,7 @@ const CountriesChartWidget: React.FC<CountriesChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };

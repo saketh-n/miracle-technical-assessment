@@ -33,7 +33,8 @@ const AddChartsModal: React.FC<AddChartsModalProps> = ({
     const previewProps = {
       key: `preview-${chartId}`,
       showDeleteButton: false,
-      className: 'pointer-events-none opacity-90'
+      className: 'pointer-events-none opacity-90',
+      isPreview: true // Prevent API calls in preview mode
     };
 
     let chartComponent;

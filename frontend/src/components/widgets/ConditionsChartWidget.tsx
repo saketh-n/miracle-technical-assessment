@@ -12,13 +12,15 @@ interface ConditionsChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const ConditionsChartWidget: React.FC<ConditionsChartWidgetProps> = ({
   source,
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   const sourceName = source === 'clinicaltrials' ? 'ClinicalTrials.gov' : 'EudraCT';
 
@@ -45,6 +47,7 @@ const ConditionsChartWidget: React.FC<ConditionsChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };

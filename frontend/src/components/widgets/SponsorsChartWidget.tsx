@@ -12,13 +12,15 @@ interface SponsorsChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const SponsorsChartWidget: React.FC<SponsorsChartWidgetProps> = ({
   type,
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   const getTitle = () => {
     switch (type) {
@@ -72,6 +74,7 @@ const SponsorsChartWidget: React.FC<SponsorsChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };

@@ -10,12 +10,14 @@ interface YearsChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const YearsChartWidget: React.FC<YearsChartWidgetProps> = ({
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   return (
     <BaseChartWidget<YearsData>
@@ -39,6 +41,7 @@ const YearsChartWidget: React.FC<YearsChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };

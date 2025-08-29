@@ -11,13 +11,15 @@ interface EnrollmentChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const EnrollmentChartWidget: React.FC<EnrollmentChartWidgetProps> = ({
   source,
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   const sourceName = source === 'clinicaltrials' ? 'ClinicalTrials.gov' : 'EudraCT';
 
@@ -45,6 +47,7 @@ const EnrollmentChartWidget: React.FC<EnrollmentChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };

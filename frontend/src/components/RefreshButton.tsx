@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useFontSize } from '../context/FontSizeContext';
+
+interface RefreshResponse {
+  total_records: number;
+}
 
 const RefreshButton: React.FC = () => {
   const { fontSize } = useFontSize();
   const [refreshStatus, setRefreshStatus] = useState<string>('');
-  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const queryClient = useQueryClient();
 
   const getFontSizeClasses = () => {
     if (fontSize === 'large') {
@@ -21,11 +26,9 @@ const RefreshButton: React.FC = () => {
 
   const { button, status } = getFontSizeClasses();
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    setRefreshStatus('');
-    
-    try {
+  // Use react-query mutation for refresh endpoint
+  const refreshMutation = useMutation({
+    mutationFn: async (): Promise<RefreshResponse> => {
       const response = await fetch('http://localhost:8000/refresh', {
         method: 'POST',
         headers: {
@@ -33,18 +36,28 @@ const RefreshButton: React.FC = () => {
         },
       });
       
-      if (response.ok) {
-        const data = await response.json();
-        setRefreshStatus(`Successfully refreshed ${data.total_records} studies`);
-      } else {
-        setRefreshStatus('Failed to refresh data');
+      if (!response.ok) {
+        throw new Error('Failed to refresh data');
       }
-    } catch (error) {
-      setRefreshStatus('Error connecting to server');
-    } finally {
-      setIsRefreshing(false);
-    }
+      
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setRefreshStatus(`Successfully refreshed ${data.total_records} studies`);
+      // Invalidate all chart data queries to force re-fetch
+      queryClient.invalidateQueries({ queryKey: ['chartData'] });
+    },
+    onError: (error) => {
+      setRefreshStatus(error instanceof Error ? error.message : 'Error connecting to server');
+    },
+  });
+
+  const handleRefresh = () => {
+    setRefreshStatus('');
+    refreshMutation.mutate();
   };
+
+  const isRefreshing = refreshMutation.isPending;
 
   return (
     <div className="text-center">

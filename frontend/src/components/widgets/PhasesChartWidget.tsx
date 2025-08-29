@@ -10,12 +10,14 @@ interface PhasesChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const PhasesChartWidget: React.FC<PhasesChartWidgetProps> = ({
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   return (
     <BaseChartWidget<PhasesData>
@@ -37,6 +39,7 @@ const PhasesChartWidget: React.FC<PhasesChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };

@@ -10,12 +10,14 @@ interface DurationsChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const DurationsChartWidget: React.FC<DurationsChartWidgetProps> = ({
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   return (
     <BaseChartWidget<DurationsData>
@@ -37,6 +39,7 @@ const DurationsChartWidget: React.FC<DurationsChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };

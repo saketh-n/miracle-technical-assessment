@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
 export interface FilterState {
   region: 'ALL' | 'US' | 'EU';
@@ -17,51 +18,63 @@ interface DateConstraints {
   max_date: string | null;
 }
 
+interface ConditionsResponse {
+  conditions: string[];
+  total_count: number;
+}
+
 const FiltersPanel: React.FC<FiltersPanelProps> = ({ filters, onFiltersChange }) => {
-  const [conditions, setConditions] = useState<string[]>([]);
-  const [dateConstraints, setDateConstraints] = useState<DateConstraints>({ min_date: null, max_date: null });
-  const [isLoading, setIsLoading] = useState(true);
   const [showConditionsDropdown, setShowConditionsDropdown] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Fetch conditions
-        const conditionsResponse = await fetch('http://localhost:8000/conditions');
-        const conditionsData = await conditionsResponse.json();
-        setConditions(conditionsData.conditions || []);
-
-        // Fetch date constraints
-        const dateResponse = await fetch('http://localhost:8000/min_max_date');
-        const dateData = await dateResponse.json();
-        if (dateData.min_date && dateData.max_date) {
-          setDateConstraints(dateData);
-          // Only set default dates if they haven't been set before
-          if (!filters.startDate) {
-            onFiltersChange({
-              ...filters,
-              startDate: new Date(dateData.min_date)
-            });
-          }
-          if (!filters.endDate) {
-            onFiltersChange({
-              ...filters,
-              endDate: new Date(dateData.max_date)
-            });
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching filter data:', error);
-      } finally {
-        setIsLoading(false);
+  // Fetch conditions using react-query with caching
+  const { data: conditionsData, isLoading: isConditionsLoading } = useQuery({
+    queryKey: ['conditions'],
+    queryFn: async (): Promise<ConditionsResponse> => {
+      const response = await fetch('http://localhost:8000/conditions');
+      if (!response.ok) {
+        throw new Error('Failed to fetch conditions');
       }
-    };
+      return response.json();
+    },
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
 
-    fetchData();
+  // Fetch date constraints using react-query with caching
+  const { data: dateData, isLoading: isDateLoading } = useQuery({
+    queryKey: ['minMaxDate'],
+    queryFn: async (): Promise<DateConstraints> => {
+      const response = await fetch('http://localhost:8000/min_max_date');
+      if (!response.ok) {
+        throw new Error('Failed to fetch date constraints');
+      }
+      return response.json();
+    },
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
 
-    // Add click outside listener for conditions dropdown
+  // Set default dates when date constraints are loaded
+  React.useEffect(() => {
+    if (dateData?.min_date && dateData?.max_date) {
+      // Only set default dates if they haven't been set before
+      if (!filters.startDate) {
+        onFiltersChange({
+          ...filters,
+          startDate: new Date(dateData.min_date)
+        });
+      }
+      if (!filters.endDate) {
+        onFiltersChange({
+          ...filters,
+          endDate: new Date(dateData.max_date)
+        });
+      }
+    }
+  }, [dateData, filters.startDate, filters.endDate, onFiltersChange]);
+
+  // Add click outside listener for conditions dropdown
+  React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setShowConditionsDropdown(false);
@@ -71,6 +84,10 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({ filters, onFiltersChange })
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const conditions = conditionsData?.conditions || [];
+  const dateConstraints = dateData || { min_date: null, max_date: null };
+  const isLoading = isConditionsLoading || isDateLoading;
 
   const handleRegionChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     onFiltersChange({

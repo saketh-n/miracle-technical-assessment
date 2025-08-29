@@ -11,13 +11,15 @@ interface StatusChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const StatusChartWidget: React.FC<StatusChartWidgetProps> = ({
   source,
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   const sourceName = source === 'clinicaltrials' ? 'ClinicalTrials.gov' : 'EudraCT';
 
@@ -44,6 +46,7 @@ const StatusChartWidget: React.FC<StatusChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };

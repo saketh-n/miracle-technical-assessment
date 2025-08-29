@@ -11,12 +11,14 @@ interface TotalsChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
   filters?: FilterState;
+  isPreview?: boolean; // Whether this is a preview (prevents API calls)
 }
 
 const TotalsChartWidget: React.FC<TotalsChartWidgetProps> = ({
   showDeleteButton = false,
   onDelete,
-  filters
+  filters,
+  isPreview = false
 }) => {
   return (
     <BaseChartWidget<TotalsData>
@@ -35,6 +37,7 @@ const TotalsChartWidget: React.FC<TotalsChartWidgetProps> = ({
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
       filters={filters}
+      isPreview={isPreview}
     />
   );
 };
