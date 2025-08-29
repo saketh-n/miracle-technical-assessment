@@ -588,6 +588,92 @@ async def get_by_country():
         logger.error(f"Error aggregating by country: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error aggregating by country: {str(e)}")
 
+@app.get("/conditions")
+async def get_conditions():
+    """Get all unique conditions from both ClinicalTrials.gov and EudraCT data."""
+    try:
+        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
+        eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        # ClinicalTrials.gov conditions
+        ct_conditions = set()
+        for study in ct_data:
+            conditions = study.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", [])
+            for cond in conditions:
+                if cond and isinstance(cond, str) and cond.strip():  # Ensure valid condition
+                    ct_conditions.add(cond.strip())
+        
+        # EudraCT conditions
+        eu_conditions = set()
+        for trial in eu_data:
+            condition = trial.get("E.1.1 Medical condition(s) being investigated", None)
+            if condition and isinstance(condition, str) and condition.strip():  # Ensure valid condition
+                eu_conditions.add(condition.strip())
+        
+        # Combine and sort all conditions
+        all_conditions = sorted(ct_conditions.union(eu_conditions))
+        
+        return {
+            "conditions": all_conditions,
+            "total_count": len(all_conditions)
+        }
+    except Exception as e:
+        logger.error(f"Error getting conditions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting conditions: {str(e)}")
+
+@app.get("/min_max_date")
+async def get_min_and_max_date():
+    """Get the earliest and latest dates across both ClinicalTrials.gov and EudraCT data."""
+    try:
+        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
+        eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        dates = []
+        
+        # ClinicalTrials.gov dates
+        for study in ct_data:
+            start_date = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
+            end_date = study.get("protocolSection", {}).get("statusModule", {}).get("completionDateStruct", {}).get("date", "")
+            if start_date:
+                try:
+                    dates.append(datetime.strptime(start_date, "%Y-%m-%d"))
+                except ValueError:
+                    continue
+            if end_date:
+                try:
+                    dates.append(datetime.strptime(end_date, "%Y-%m-%d"))
+                except ValueError:
+                    continue
+        
+        # EudraCT dates
+        for trial in eu_data:
+            start_date = trial.get("Date on which this record was first entered in the EudraCT database", "")
+            end_date = trial.get("P. Date of the global end of the trial", "")
+            if start_date:
+                try:
+                    dates.append(datetime.strptime(start_date, "%Y-%m-%d"))
+                except ValueError:
+                    continue
+            if end_date:
+                try:
+                    dates.append(datetime.strptime(end_date, "%Y-%m-%d"))
+                except ValueError:
+                    continue
+        
+        if not dates:
+            return {
+                "min_date": None,
+                "max_date": None
+            }
+        
+        return {
+            "min_date": min(dates).strftime("%Y-%m-%d"),
+            "max_date": max(dates).strftime("%Y-%m-%d")
+        }
+    except Exception as e:
+        logger.error(f"Error getting min/max dates: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting min/max dates: {str(e)}")
+
 @app.get("/aggregations/by_duration")
 async def get_by_duration():
     """Aggregate trials by duration bins."""
