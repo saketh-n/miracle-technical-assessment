@@ -280,12 +280,12 @@ function BaseChartWidget<T extends Record<string, any>>({
         {showDeleteButton && onDelete && (
           <button
             onClick={onDelete}
-            className="ml-2 p-1.5 rounded-full hover:bg-red-100 text-red-500 hover:text-red-700 transition-colors duration-200"
+            className="p-2 rounded-full bg-gray-100 text-gray-500 hover:bg-red-100 hover:text-red-600 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 shadow-sm transition-all duration-200"
             title="Delete widget"
           >
             <svg
-              width="16"
-              height="16"
+              width="18"
+              height="18"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
