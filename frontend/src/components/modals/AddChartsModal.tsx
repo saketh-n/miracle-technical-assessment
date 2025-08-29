@@ -1,4 +1,15 @@
 import React, { useState, useEffect } from 'react';
+import {
+  TotalsChartWidget,
+  ConditionsChartWidget,
+  SponsorsChartWidget,
+  EnrollmentChartWidget,
+  StatusChartWidget,
+  PhasesChartWidget,
+  YearsChartWidget,
+  CountriesChartWidget,
+  DurationsChartWidget,
+} from '../widgets';
 
 interface AddChartsModalProps {
   isOpen: boolean;
@@ -16,6 +27,77 @@ const AddChartsModal: React.FC<AddChartsModalProps> = ({
   chartInfo
 }) => {
   const [selectedCharts, setSelectedCharts] = useState<string[]>([]);
+
+  // Render chart preview based on chartId
+  const renderChartPreview = (chartId: string) => {
+    const previewProps = {
+      key: `preview-${chartId}`,
+      showDeleteButton: false,
+      className: 'pointer-events-none opacity-90'
+    };
+
+    let chartComponent;
+    switch (chartId) {
+      case 'totals':
+        chartComponent = <TotalsChartWidget {...previewProps} />;
+        break;
+      case 'conditions-clinicaltrials':
+        chartComponent = <ConditionsChartWidget source="clinicaltrials" {...previewProps} />;
+        break;
+      case 'conditions-eudract':
+        chartComponent = <ConditionsChartWidget source="eudract" {...previewProps} />;
+        break;
+      case 'sponsors-clinicaltrials':
+        chartComponent = <SponsorsChartWidget type="clinicaltrials" {...previewProps} />;
+        break;
+      case 'sponsors-eudract':
+        chartComponent = <SponsorsChartWidget type="eudract" {...previewProps} />;
+        break;
+      case 'sponsors-combined':
+        chartComponent = <SponsorsChartWidget type="combined" {...previewProps} />;
+        break;
+      case 'enrollment-clinicaltrials':
+        chartComponent = <EnrollmentChartWidget source="clinicaltrials" {...previewProps} />;
+        break;
+      case 'enrollment-eudract':
+        chartComponent = <EnrollmentChartWidget source="eudract" {...previewProps} />;
+        break;
+      case 'status-clinicaltrials':
+        chartComponent = <StatusChartWidget source="clinicaltrials" {...previewProps} />;
+        break;
+      case 'status-eudract':
+        chartComponent = <StatusChartWidget source="eudract" {...previewProps} />;
+        break;
+      case 'phases':
+        chartComponent = <PhasesChartWidget {...previewProps} />;
+        break;
+      case 'years':
+        chartComponent = <YearsChartWidget {...previewProps} />;
+        break;
+      case 'countries':
+        chartComponent = <CountriesChartWidget {...previewProps} />;
+        break;
+      case 'durations':
+        chartComponent = <DurationsChartWidget {...previewProps} />;
+        break;
+      default:
+        return (
+          <div className="flex items-center justify-center h-24 bg-gray-100 rounded">
+            <div className="text-xs text-gray-600">Preview not available</div>
+          </div>
+        );
+    }
+
+    return (
+      <div className="relative overflow-hidden rounded bg-gray-50">
+        <div className="transform scale-50 origin-top-left" style={{ width: '200%', height: '200px' }}>
+          <div className="w-full h-full bg-white rounded">
+            {chartComponent}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // Reset selection when modal opens/closes
   useEffect(() => {
@@ -99,36 +181,46 @@ const AddChartsModal: React.FC<AddChartsModalProps> = ({
           </div>
 
           {/* Chart List */}
-          <div className="space-y-2">
+          <div className="space-y-4">
             {missingCharts.map((chartId) => (
               <button
                 key={chartId}
                 onClick={() => handleChartSelection(chartId)}
-                className={`w-full text-left p-3 rounded-lg border transition-colors duration-200 flex items-center gap-3 ${
+                className={`w-full text-left p-4 rounded-lg border transition-colors duration-200 ${
                   selectedCharts.includes(chartId)
                     ? 'border-blue-300 bg-blue-50'
                     : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50'
                 }`}
               >
-                {/* Checkbox */}
-                <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                  selectedCharts.includes(chartId)
-                    ? 'border-blue-500 bg-blue-500'
-                    : 'border-gray-300'
-                }`}>
-                  {selectedCharts.includes(chartId) && (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3">
-                      <path d="M20 6L9 17l-5-5"></path>
-                    </svg>
-                  )}
-                </div>
+                <div className="flex items-start gap-3">
+                  {/* Checkbox */}
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center mt-1 flex-shrink-0 ${
+                    selectedCharts.includes(chartId)
+                      ? 'border-blue-500 bg-blue-500'
+                      : 'border-gray-300'
+                  }`}>
+                    {selectedCharts.includes(chartId) && (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3">
+                        <path d="M20 6L9 17l-5-5"></path>
+                      </svg>
+                    )}
+                  </div>
 
-                {/* Chart Name */}
-                <span className={`font-medium ${
-                  selectedCharts.includes(chartId) ? 'text-blue-900' : 'text-gray-900'
-                }`}>
-                  {chartInfo[chartId]}
-                </span>
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    {/* Chart Name */}
+                    <h4 className={`font-semibold text-sm mb-2 ${
+                      selectedCharts.includes(chartId) ? 'text-blue-900' : 'text-gray-900'
+                    }`}>
+                      {chartInfo[chartId]}
+                    </h4>
+
+                    {/* Chart Preview */}
+                    <div className="rounded border border-gray-100 overflow-hidden bg-white">
+                      {renderChartPreview(chartId)}
+                    </div>
+                  </div>
+                </div>
               </button>
             ))}
           </div>
