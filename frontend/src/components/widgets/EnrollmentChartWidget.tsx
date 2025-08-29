@@ -1,6 +1,6 @@
 import React from 'react';
 import BaseChartWidget from './BaseChartWidget';
-
+import type { FilterState } from '../FiltersPanel';
 interface EnrollmentData {
   clinicaltrials_enrollment: Record<string, number>;
   eudract_enrollment: Record<string, number>;
@@ -10,12 +10,14 @@ interface EnrollmentChartWidgetProps {
   source: 'clinicaltrials' | 'eudract';
   showDeleteButton?: boolean;
   onDelete?: () => void;
+  filters?: FilterState;
 }
 
 const EnrollmentChartWidget: React.FC<EnrollmentChartWidgetProps> = ({
   source,
   showDeleteButton = false,
-  onDelete
+  onDelete,
+  filters
 }) => {
   const sourceName = source === 'clinicaltrials' ? 'ClinicalTrials.gov' : 'EudraCT';
 
@@ -42,6 +44,7 @@ const EnrollmentChartWidget: React.FC<EnrollmentChartWidgetProps> = ({
       }}
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
+      filters={filters}
     />
   );
 };

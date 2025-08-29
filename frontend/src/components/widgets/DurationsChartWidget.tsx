@@ -1,6 +1,6 @@
 import React from 'react';
 import BaseChartWidget from './BaseChartWidget';
-
+import type { FilterState } from '../FiltersPanel';
 interface DurationsData {
   clinicaltrials_durations: Record<string, number>;
   eudract_durations: Record<string, number>;
@@ -9,11 +9,13 @@ interface DurationsData {
 interface DurationsChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
+  filters?: FilterState;
 }
 
 const DurationsChartWidget: React.FC<DurationsChartWidgetProps> = ({
   showDeleteButton = false,
-  onDelete
+  onDelete,
+  filters
 }) => {
   return (
     <BaseChartWidget<DurationsData>
@@ -35,6 +37,7 @@ const DurationsChartWidget: React.FC<DurationsChartWidgetProps> = ({
       }
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
+      filters={filters}
     />
   );
 };

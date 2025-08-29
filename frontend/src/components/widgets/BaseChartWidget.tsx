@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import { useFontSize } from '../../context/FontSizeContext';
+import type { FilterState } from '../FiltersPanel';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#a4de6c', '#d0ed57'];
 
@@ -25,6 +26,7 @@ export interface BaseChartWidgetProps<T> {
   refreshTrigger?: number; // Optional prop to trigger re-fetch
   showDeleteButton?: boolean; // Whether to show delete button
   onDelete?: () => void; // Callback when delete button is clicked
+  filters?: FilterState; // Optional filters to apply
 }
 
 export interface DeleteProps {
@@ -40,21 +42,51 @@ function BaseChartWidget<T extends Record<string, any>>({
   className = '',
   refreshTrigger,
   showDeleteButton = false,
-  onDelete
+  onDelete,
+  filters
 }: BaseChartWidgetProps<T>) {
   const { fontSize } = useFontSize();
   const [data, setData] = useState<T | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const buildQueryString = (filters?: FilterState): string => {
+    if (!filters) return '';
+    
+    const params = new URLSearchParams();
+    
+    if (filters.region && filters.region !== 'ALL') {
+      params.append('region', filters.region);
+    }
+    
+    if (filters.condition && filters.condition.length > 0) {
+      filters.condition.forEach(condition => {
+        params.append('conditions', condition);
+      });
+    }
+    
+    if (filters.startDate) {
+      params.append('start_date', filters.startDate.toISOString().split('T')[0]);
+    }
+    
+    if (filters.endDate) {
+      params.append('end_date', filters.endDate.toISOString().split('T')[0]);
+    }
+    
+    const queryString = params.toString();
+    return queryString ? `?${queryString}` : '';
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         setIsLoading(true);
         setError(null);
-        const response = await fetch(endpoint);
+        const queryString = buildQueryString(filters);
+        const fullUrl = `${endpoint}${queryString}`;
+        const response = await fetch(fullUrl);
         if (!response.ok) {
-          throw new Error(`Failed to fetch data from ${endpoint}`);
+          throw new Error(`Failed to fetch data from ${fullUrl}`);
         }
         const result = await response.json();
         setData(result);
@@ -66,7 +98,7 @@ function BaseChartWidget<T extends Record<string, any>>({
     };
 
     fetchData();
-  }, [endpoint, refreshTrigger]);
+  }, [endpoint, refreshTrigger, filters]);
 
   const getFontSizeClasses = () => {
     if (fontSize === 'large') {

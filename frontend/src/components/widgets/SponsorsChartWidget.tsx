@@ -1,5 +1,6 @@
 import React from 'react';
 import BaseChartWidget from './BaseChartWidget';
+import type { FilterState } from '../FiltersPanel';
 
 interface SponsorsData {
   clinicaltrials_sponsors: Record<string, number>;
@@ -10,12 +11,14 @@ interface SponsorsChartWidgetProps {
   type: 'clinicaltrials' | 'eudract' | 'combined';
   showDeleteButton?: boolean;
   onDelete?: () => void;
+  filters?: FilterState;
 }
 
 const SponsorsChartWidget: React.FC<SponsorsChartWidgetProps> = ({
   type,
   showDeleteButton = false,
-  onDelete
+  onDelete,
+  filters
 }) => {
   const getTitle = () => {
     switch (type) {
@@ -69,6 +72,7 @@ const SponsorsChartWidget: React.FC<SponsorsChartWidgetProps> = ({
       }}
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
+      filters={filters}
     />
   );
 };

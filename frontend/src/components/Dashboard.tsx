@@ -105,7 +105,7 @@ const Dashboard: React.FC = () => {
   const [showAddChartModal, setShowAddChartModal] = useState(false);
   const [filters, setFilters] = useState<FilterState>({
     region: 'ALL',
-    condition: '',
+    condition: [],
     startDate: null,
     endDate: null,
   });
@@ -251,6 +251,7 @@ const Dashboard: React.FC = () => {
         key="totals"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('totals')}
+        filters={filters}
       />
     ),
     'conditions-clinicaltrials': (
@@ -259,6 +260,7 @@ const Dashboard: React.FC = () => {
         source="clinicaltrials"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('conditions-clinicaltrials')}
+        filters={filters}
       />
     ),
     'conditions-eudract': (
@@ -267,6 +269,7 @@ const Dashboard: React.FC = () => {
         source="eudract"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('conditions-eudract')}
+        filters={filters}
       />
     ),
     'sponsors-clinicaltrials': (
@@ -275,6 +278,7 @@ const Dashboard: React.FC = () => {
         type="clinicaltrials"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('sponsors-clinicaltrials')}
+        filters={filters}
       />
     ),
     'sponsors-eudract': (
@@ -283,6 +287,7 @@ const Dashboard: React.FC = () => {
         type="eudract"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('sponsors-eudract')}
+        filters={filters}
       />
     ),
     'sponsors-combined': (
@@ -291,6 +296,7 @@ const Dashboard: React.FC = () => {
         type="combined"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('sponsors-combined')}
+        filters={filters}
       />
     ),
     'enrollment-clinicaltrials': (
@@ -299,6 +305,7 @@ const Dashboard: React.FC = () => {
         source="clinicaltrials"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('enrollment-clinicaltrials')}
+        filters={filters}
       />
     ),
     'enrollment-eudract': (
@@ -307,6 +314,7 @@ const Dashboard: React.FC = () => {
         source="eudract"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('enrollment-eudract')}
+        filters={filters}
       />
     ),
     'status-clinicaltrials': (
@@ -315,6 +323,7 @@ const Dashboard: React.FC = () => {
         source="clinicaltrials"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('status-clinicaltrials')}
+        filters={filters}
       />
     ),
     'status-eudract': (
@@ -323,6 +332,7 @@ const Dashboard: React.FC = () => {
         source="eudract"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('status-eudract')}
+        filters={filters}
       />
     ),
     'phases': (
@@ -330,6 +340,7 @@ const Dashboard: React.FC = () => {
         key="phases"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('phases')}
+        filters={filters}
       />
     ),
     'years': (
@@ -337,6 +348,7 @@ const Dashboard: React.FC = () => {
         key="years"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('years')}
+        filters={filters}
       />
     ),
     'countries': (
@@ -344,6 +356,7 @@ const Dashboard: React.FC = () => {
         key="countries"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('countries')}
+        filters={filters}
       />
     ),
     'durations': (
@@ -351,6 +364,7 @@ const Dashboard: React.FC = () => {
         key="durations"
         showDeleteButton={true}
         onDelete={() => handleDeleteChart('durations')}
+        filters={filters}
       />
     ),
   };

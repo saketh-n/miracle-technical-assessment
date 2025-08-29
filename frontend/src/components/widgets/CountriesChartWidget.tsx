@@ -1,6 +1,6 @@
 import React from 'react';
 import BaseChartWidget from './BaseChartWidget';
-
+import type { FilterState } from '../FiltersPanel';
 interface CountriesData {
   clinicaltrials_countries: Record<string, number>;
 }
@@ -8,11 +8,13 @@ interface CountriesData {
 interface CountriesChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
+  filters?: FilterState;
 }
 
 const CountriesChartWidget: React.FC<CountriesChartWidgetProps> = ({
   showDeleteButton = false,
-  onDelete
+  onDelete,
+  filters
 }) => {
   return (
     <BaseChartWidget<CountriesData>
@@ -34,6 +36,7 @@ const CountriesChartWidget: React.FC<CountriesChartWidgetProps> = ({
       }
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
+      filters={filters}
     />
   );
 };

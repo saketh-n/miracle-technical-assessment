@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from typing import List, Optional
 import requests
 import json
 import pandas as pd
@@ -205,6 +206,146 @@ def fetch_eudract_data(limit=NUM_TRIALS, batch_size=5, start_page=1):
         logger.error(f"Error fetching EudraCT data: {e}")
         return {"error": str(e), "data": None, "last_updated": datetime.utcnow().isoformat()}
 
+def parse_date_flexible(date_str: str) -> datetime:
+    """Parse date string with multiple possible formats."""
+    if not date_str:
+        raise ValueError("Empty date string")
+    
+    # Try different date formats
+    formats = ["%Y-%m-%d", "%Y-%m", "%Y"]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    
+    raise ValueError(f"Unable to parse date: {date_str}")
+
+def filter_data(ct_data, eu_data=None, region: Optional[str] = None, conditions: Optional[List[str]] = None, start_date: Optional[str] = None, end_date: Optional[str] = None):
+    """Filter clinical trials data based on provided filters."""
+    filtered_ct_data = ct_data.copy() if ct_data else []
+    filtered_eu_data = eu_data.copy() if eu_data else []
+    
+    # Filter by region
+    if region and region != 'ALL':
+        eu_countries = [
+            "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark",
+            "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland",
+            "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands",
+            "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"
+        ]
+        
+        if region == 'US':
+            # Filter ClinicalTrials.gov to US only
+            filtered_ct_data = [
+                study for study in filtered_ct_data
+                if any(loc.get("country", "") == "United States" 
+                      for loc in study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", []))
+            ]
+            # Remove all EudraCT data for US filter
+            filtered_eu_data = []
+            
+        elif region == 'EU':
+            # Filter ClinicalTrials.gov to EU countries only
+            filtered_ct_data = [
+                study for study in filtered_ct_data
+                if any(loc.get("country", "") in eu_countries 
+                      for loc in study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", []))
+            ]
+            # Keep all EudraCT data (it's all EU)
+    
+    # Filter by conditions
+    if conditions and len(conditions) > 0:
+        # Filter ClinicalTrials.gov by conditions
+        filtered_ct_data = [
+            study for study in filtered_ct_data
+            if any(cond in study.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", [])
+                  for cond in conditions)
+        ]
+        
+        # Filter EudraCT by conditions
+        filtered_eu_data = [
+            trial for trial in filtered_eu_data
+            if any(cond in trial.get("E.1.1 Medical condition(s) being investigated", "")
+                  for cond in conditions)
+        ]
+    
+    # Filter by date range
+    if start_date or end_date:
+        if start_date:
+            try:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                # Filter ClinicalTrials.gov
+                filtered_ct_data_new = []
+                for study in filtered_ct_data:
+                    study_date_str = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
+                    if study_date_str:
+                        try:
+                            study_date = parse_date_flexible(study_date_str)
+                            if study_date >= start_dt:
+                                filtered_ct_data_new.append(study)
+                        except ValueError:
+                            # Skip studies with unparseable dates
+                            continue
+                filtered_ct_data = filtered_ct_data_new
+                
+                # Filter EudraCT
+                filtered_eu_data_new = []
+                for trial in filtered_eu_data:
+                    trial_date_str = trial.get("Date on which this record was first entered in the EudraCT database", "")
+                    if trial_date_str:
+                        try:
+                            trial_date = parse_date_flexible(trial_date_str)
+                            if trial_date >= start_dt:
+                                filtered_eu_data_new.append(trial)
+                        except ValueError:
+                            # Skip trials with unparseable dates
+                            continue
+                filtered_eu_data = filtered_eu_data_new
+            except ValueError:
+                logger.error(f"Invalid start_date format: {start_date}")
+        
+        if end_date:
+            try:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                # Filter ClinicalTrials.gov
+                filtered_ct_data_new = []
+                for study in filtered_ct_data:
+                    study_date_str = study.get("protocolSection", {}).get("statusModule", {}).get("completionDateStruct", {}).get("date", "")
+                    if study_date_str:
+                        try:
+                            study_date = parse_date_flexible(study_date_str)
+                            if study_date <= end_dt:
+                                filtered_ct_data_new.append(study)
+                        except ValueError:
+                            # Skip studies with unparseable dates
+                            continue
+                    else:
+                        # Include studies without end dates when filtering by end date
+                        filtered_ct_data_new.append(study)
+                filtered_ct_data = filtered_ct_data_new
+                
+                # Filter EudraCT
+                filtered_eu_data_new = []
+                for trial in filtered_eu_data:
+                    trial_date_str = trial.get("P. Date of the global end of the trial", "")
+                    if trial_date_str:
+                        try:
+                            trial_date = parse_date_flexible(trial_date_str)
+                            if trial_date <= end_dt:
+                                filtered_eu_data_new.append(trial)
+                        except ValueError:
+                            # Skip trials with unparseable dates
+                            continue
+                    else:
+                        # Include trials without end dates when filtering by end date
+                        filtered_eu_data_new.append(trial)
+                filtered_eu_data = filtered_eu_data_new
+            except ValueError:
+                logger.error(f"Invalid end_date format: {end_date}")
+    
+    return filtered_ct_data, filtered_eu_data
+
 def load_eudract_data():
     """Load EudraCT data from static JSON file."""
     try:
@@ -319,38 +460,59 @@ async def refresh_data():
         raise HTTPException(status_code=500, detail="Failed to refresh data")
 
 @app.get("/aggregations/totals")
-async def get_totals():
-    """Get total number of trials from both sources."""
+async def get_totals(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Get total number of trials from both sources with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        # Apply filters
+        filtered_ct_data, filtered_eu_data = filter_data(
+            ct_data, eu_data, region, conditions, start_date, end_date
+        )
+        
         return {
-            "clinicaltrials_total": len(ct_data),
-            "eudract_total": len(eu_data)
+            "clinicaltrials_total": len(filtered_ct_data),
+            "eudract_total": len(filtered_eu_data)
         }
     except Exception as e:
         logger.error(f"Error calculating totals: {e}")
         raise HTTPException(status_code=500, detail="Error calculating totals")
 
 @app.get("/aggregations/by_condition")
-async def get_by_condition():
-    """Aggregate trials by condition."""
+async def get_by_condition(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Aggregate trials by condition with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
         
+        # Apply filters
+        filtered_ct_data, filtered_eu_data = filter_data(
+            ct_data, eu_data, region, conditions, start_date, end_date
+        )
+        
         # ClinicalTrials.gov conditions
         ct_conditions = {}
-        for study in ct_data:
-            conditions = study.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", [])
-            for cond in conditions:
+        for study in filtered_ct_data:
+            conditions_list = study.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", [])
+            for cond in conditions_list:
                 if cond and isinstance(cond, str) and cond.strip():  # Ensure valid condition
                     ct_conditions[cond] = ct_conditions.get(cond, 0) + 1
         ct_conditions = dict(sorted(ct_conditions.items(), key=lambda x: x[1], reverse=True)[:10])
         
         # EudraCT conditions
         eu_conditions = {}
-        for trial in eu_data:
+        for trial in filtered_eu_data:
             condition = trial.get("E.1.1 Medical condition(s) being investigated", None)
             if condition and isinstance(condition, str) and condition.strip():  # Ensure valid condition
                 eu_conditions[condition] = eu_conditions.get(condition, 0) + 1
@@ -367,15 +529,25 @@ async def get_by_condition():
         raise HTTPException(status_code=500, detail=f"Error aggregating by condition: {str(e)}")
 
 @app.get("/aggregations/by_sponsor")
-async def get_by_sponsor():
-    """Aggregate trials by sponsor (top 10)."""
+async def get_by_sponsor(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Aggregate trials by sponsor (top 10) with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
         
+        # Apply filters
+        filtered_ct_data, filtered_eu_data = filter_data(
+            ct_data, eu_data, region, conditions, start_date, end_date
+        )
+        
         # ClinicalTrials.gov sponsors
         ct_sponsors = {}
-        for study in ct_data:
+        for study in filtered_ct_data:
             sponsor = study.get("protocolSection", {}).get("sponsorCollaboratorsModule", {}).get("leadSponsor", {}).get("name", "Unknown")
             if sponsor and isinstance(sponsor, str) and sponsor.strip():  # Ensure valid sponsor
                 ct_sponsors[sponsor] = ct_sponsors.get(sponsor, 0) + 1
@@ -383,7 +555,7 @@ async def get_by_sponsor():
         
         # EudraCT sponsors
         eu_sponsors = {}
-        for trial in eu_data:
+        for trial in filtered_eu_data:
             sponsor = trial.get("B.1.1 Name of Sponsor", "Unknown")
             if sponsor and isinstance(sponsor, str) and sponsor.strip():  # Ensure valid sponsor
                 eu_sponsors[sponsor] = eu_sponsors.get(sponsor, 0) + 1
@@ -400,11 +572,21 @@ async def get_by_sponsor():
         raise HTTPException(status_code=500, detail=f"Error aggregating by sponsor: {str(e)}")
 
 @app.get("/aggregations/enrollment_by_region")
-async def get_enrollment_by_region():
-    """Aggregate enrollment totals by region (US, EU, Others)."""
+async def get_enrollment_by_region(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Aggregate enrollment totals by region (US, EU, Others) with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        # Apply filters
+        filtered_ct_data, filtered_eu_data = filter_data(
+            ct_data, eu_data, region, conditions, start_date, end_date
+        )
         
         # ClinicalTrials.gov: Parse locations for US/EU/Others
         ct_enrollment = {"US": 0, "EU": 0, "Others": 0}
@@ -414,7 +596,7 @@ async def get_enrollment_by_region():
             "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands",
             "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"
         ]
-        for study in ct_data:
+        for study in filtered_ct_data:
             enrollment = study.get("protocolSection", {}).get("designModule", {}).get("enrollmentInfo", {}).get("count", 0) or 0
             locations = study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", [])
             is_us = any(loc.get("country", "") == "United States" for loc in locations)
@@ -428,7 +610,7 @@ async def get_enrollment_by_region():
         
         # EudraCT: Assume EU unless marked "Outside EU/EEA"
         eu_enrollment = {"EU": 0, "Others": 0}
-        for trial in eu_data:
+        for trial in filtered_eu_data:
             enrollment_str = trial.get("F.4.2.2 In the whole clinical trial", "0")
             enrollment = int(enrollment_str) if enrollment_str.isdigit() else 0
             if trial.get("Trial protocol", "").endswith("Outside EU/EEA"):
@@ -445,15 +627,25 @@ async def get_enrollment_by_region():
         raise HTTPException(status_code=500, detail="Error aggregating enrollment by region")
 
 @app.get("/aggregations/by_status")
-async def get_by_status():
-    """Aggregate trials by status (Completed, Recruiting, Unknown)."""
+async def get_by_status(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Aggregate trials by status (Completed, Recruiting, Unknown) with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
         
+        # Apply filters
+        filtered_ct_data, filtered_eu_data = filter_data(
+            ct_data, eu_data, region, conditions, start_date, end_date
+        )
+        
         # ClinicalTrials.gov statuses
         ct_statuses = {"Completed": 0, "Recruiting": 0, "Unknown": 0}
-        for study in ct_data:
+        for study in filtered_ct_data:
             status = study.get("protocolSection", {}).get("statusModule", {}).get("overallStatus", "Unknown")
             if status == "COMPLETED":
                 ct_statuses["Completed"] += 1
@@ -464,7 +656,7 @@ async def get_by_status():
         
         # EudraCT statuses
         eu_statuses = {}
-        for trial in eu_data:
+        for trial in filtered_eu_data:
             status = trial.get("P. End of Trial Status")
             if status and isinstance(status, str) and status.strip():
                 eu_statuses[status] = eu_statuses.get(status, 0) + 1;
@@ -478,15 +670,25 @@ async def get_by_status():
         raise HTTPException(status_code=500, detail=f"Error aggregating by status: {str(e)}")
 
 @app.get("/aggregations/by_phase")
-async def get_by_phase():
-    """Aggregate trials by phase (I, II, III, IV)."""
+async def get_by_phase(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Aggregate trials by phase (I, II, III, IV) with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
         
+        # Apply filters
+        filtered_ct_data, filtered_eu_data = filter_data(
+            ct_data, eu_data, region, conditions, start_date, end_date
+        )
+        
         # ClinicalTrials.gov phases
         ct_phases = {"Phase I": 0, "Phase II": 0, "Phase III": 0, "Phase IV": 0}
-        for study in ct_data:
+        for study in filtered_ct_data:
             phases = study.get("protocolSection", {}).get("designModule", {}).get("phases", [])
             if not isinstance(phases, list):  # Handle unexpected non-array cases
                 phases = [phases] if phases else []
@@ -503,7 +705,7 @@ async def get_by_phase():
         # EudraCT phases (extract from title)
         eu_phases = {"Phase I": 0, "Phase II": 0, "Phase III": 0, "Phase IV": 0}
         phase_pattern = r'(?:phase|Phase)\s*(?:I{1,3}|IV|1(?:/2)?(?:/3)?(?:/4)?|2(?:/3)?(?:/4)?|3(?:/4)?|4)\b'
-        for trial in eu_data:
+        for trial in filtered_eu_data:
             title = trial.get("A.3 Full title of the trial", "")
             if title and isinstance(title, str):
                 matches = re.findall(phase_pattern, title, re.IGNORECASE)
@@ -528,15 +730,25 @@ async def get_by_phase():
         raise HTTPException(status_code=500, detail=f"Error aggregating by phase: {str(e)}")
 
 @app.get("/aggregations/by_year")
-async def get_by_year():
-    """Aggregate cumulative enrollment by trial start year."""
+async def get_by_year(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Aggregate cumulative enrollment by trial start year with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
         
+        # Apply filters
+        filtered_ct_data, filtered_eu_data = filter_data(
+            ct_data, eu_data, region, conditions, start_date, end_date
+        )
+        
         # ClinicalTrials.gov enrollment by year
         ct_years = {}
-        for study in ct_data:
+        for study in filtered_ct_data:
             start_date = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
             enrollment = study.get("protocolSection", {}).get("designModule", {}).get("enrollmentInfo", {}).get("count", 0) or 0
             if start_date:
@@ -546,12 +758,12 @@ async def get_by_year():
         
         # EudraCT enrollment by year
         eu_years = {}
-        for trial in eu_data:
+        for trial in filtered_eu_data:
             start_date = trial.get("Date on which this record was first entered in the EudraCT database", "")
             enrollment = int(trial.get("F.4.2.2 In the whole clinical trial", "0")) if trial.get("F.4.2.2 In the whole clinical trial", "0").isdigit() else 0
             if start_date:
                 try:
-                    year = datetime.strptime(start_date, "%Y-%m-%d").year
+                    year = parse_date_flexible(start_date).year
                     eu_years[str(year)] = eu_years.get(str(year), 0) + enrollment
                 except ValueError:
                     continue
@@ -570,12 +782,23 @@ async def get_by_year():
         raise HTTPException(status_code=500, detail=f"Error aggregating by year: {str(e)}")
 
 @app.get("/aggregations/by_country")
-async def get_by_country():
-    """Aggregate trials by country (top 10) for ClinicalTrials.gov."""
+async def get_by_country(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Aggregate trials by country (top 10) for ClinicalTrials.gov with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
+        
+        # Apply filters (no eu_data needed for country aggregation)
+        filtered_ct_data, _ = filter_data(
+            ct_data, None, region, conditions, start_date, end_date
+        )
+        
         ct_countries = {}
-        for study in ct_data:
+        for study in filtered_ct_data:
             locations = study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", [])
             for loc in locations:
                 country = loc.get("country", "Unknown")
@@ -636,12 +859,12 @@ async def get_min_and_max_date():
             end_date = study.get("protocolSection", {}).get("statusModule", {}).get("completionDateStruct", {}).get("date", "")
             if start_date:
                 try:
-                    dates.append(datetime.strptime(start_date, "%Y-%m-%d"))
+                    dates.append(parse_date_flexible(start_date))
                 except ValueError:
                     continue
             if end_date:
                 try:
-                    dates.append(datetime.strptime(end_date, "%Y-%m-%d"))
+                    dates.append(parse_date_flexible(end_date))
                 except ValueError:
                     continue
         
@@ -651,12 +874,12 @@ async def get_min_and_max_date():
             end_date = trial.get("P. Date of the global end of the trial", "")
             if start_date:
                 try:
-                    dates.append(datetime.strptime(start_date, "%Y-%m-%d"))
+                    dates.append(parse_date_flexible(start_date))
                 except ValueError:
                     continue
             if end_date:
                 try:
-                    dates.append(datetime.strptime(end_date, "%Y-%m-%d"))
+                    dates.append(parse_date_flexible(end_date))
                 except ValueError:
                     continue
         
@@ -675,11 +898,21 @@ async def get_min_and_max_date():
         raise HTTPException(status_code=500, detail=f"Error getting min/max dates: {str(e)}")
 
 @app.get("/aggregations/by_duration")
-async def get_by_duration():
-    """Aggregate trials by duration bins."""
+async def get_by_duration(
+    region: Optional[str] = Query(None, description="Filter by region: US, EU, or ALL"),
+    conditions: Optional[List[str]] = Query(None, description="Filter by conditions"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
+):
+    """Aggregate trials by duration bins with optional filters."""
     try:
         ct_data = (await get_clinicaltrials())["data"].get("studies", [])
         eu_data = (await get_eudract())["data"].get("studies", [])
+        
+        # Apply filters
+        filtered_ct_data, filtered_eu_data = filter_data(
+            ct_data, eu_data, region, conditions, start_date, end_date
+        )
         
         bins = {
             "<1 year": 0,
@@ -692,13 +925,13 @@ async def get_by_duration():
         eu_durations = bins.copy()
         
         # ClinicalTrials.gov durations
-        for study in ct_data:
+        for study in filtered_ct_data:
             start_date = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
             end_date = study.get("protocolSection", {}).get("statusModule", {}).get("completionDateStruct", {}).get("date", "")
             if start_date and end_date:
                 try:
-                    start = datetime.strptime(start_date, "%Y-%m-%d")
-                    end = datetime.strptime(end_date, "%Y-%m-%d")
+                    start = parse_date_flexible(start_date)
+                    end = parse_date_flexible(end_date)
                     months = (end.year - start.year) * 12 + end.month - start.month
                     if months < 12:
                         ct_durations["<1 year"] += 1
@@ -714,13 +947,13 @@ async def get_by_duration():
                     continue
         
         # EudraCT durations
-        for trial in eu_data:
+        for trial in filtered_eu_data:
             start_date = trial.get("Date on which this record was first entered in the EudraCT database", "")
             end_date = trial.get("P. Date of the global end of the trial", "")
             if start_date and end_date:
                 try:
-                    start = datetime.strptime(start_date, "%Y-%m-%d")
-                    end = datetime.strptime(end_date, "%Y-%m-%d")
+                    start = parse_date_flexible(start_date)
+                    end = parse_date_flexible(end_date)
                     months = (end.year - start.year) * 12 + end.month - start.month
                     if months < 12:
                         eu_durations["<1 year"] += 1

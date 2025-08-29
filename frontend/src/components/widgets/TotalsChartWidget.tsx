@@ -1,5 +1,6 @@
 import React from 'react';
 import BaseChartWidget from './BaseChartWidget';
+import type { FilterState } from '../FiltersPanel';
 
 interface TotalsData {
   clinicaltrials_total: number;
@@ -9,11 +10,13 @@ interface TotalsData {
 interface TotalsChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
+  filters?: FilterState;
 }
 
 const TotalsChartWidget: React.FC<TotalsChartWidgetProps> = ({
   showDeleteButton = false,
-  onDelete
+  onDelete,
+  filters
 }) => {
   return (
     <BaseChartWidget<TotalsData>
@@ -32,6 +35,7 @@ const TotalsChartWidget: React.FC<TotalsChartWidgetProps> = ({
       ]}
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
+      filters={filters}
     />
   );
 };

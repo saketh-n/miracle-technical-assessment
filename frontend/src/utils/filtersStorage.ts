@@ -2,13 +2,20 @@ import type { FilterState } from '../components/FiltersPanel';
 
 const FILTERS_STORAGE_KEY = 'dashboard_filters';
 
+interface StoredFilterState {
+  region: 'ALL' | 'US' | 'EU';
+  condition: string[];
+  startDate: string | null;  // ISO string for storage
+  endDate: string | null;    // ISO string for storage
+}
+
 interface DashboardFilters {
-  [dashboardId: string]: FilterState;
+  [dashboardId: string]: StoredFilterState;
 }
 
 export const getDefaultFilters = (): FilterState => ({
   region: 'ALL',
-  condition: '',
+  condition: [],
   startDate: null,
   endDate: null,
 });
@@ -19,7 +26,8 @@ export const saveFilters = (dashboardId: string, filters: FilterState): void => 
     const allFilters: DashboardFilters = storedFilters ? JSON.parse(storedFilters) : {};
     
     allFilters[dashboardId] = {
-      ...filters,
+      region: filters.region,
+      condition: filters.condition,
       // Convert dates to ISO strings for storage
       startDate: filters.startDate ? filters.startDate.toISOString() : null,
       endDate: filters.endDate ? filters.endDate.toISOString() : null,

@@ -1,6 +1,6 @@
 import React from 'react';
 import BaseChartWidget from './BaseChartWidget';
-
+import type { FilterState } from '../FiltersPanel';
 interface StatusData {
   clinicaltrials_statuses: Record<string, number>;
   eudract_statuses: Record<string, number>;
@@ -10,12 +10,14 @@ interface StatusChartWidgetProps {
   source: 'clinicaltrials' | 'eudract';
   showDeleteButton?: boolean;
   onDelete?: () => void;
+  filters?: FilterState;
 }
 
 const StatusChartWidget: React.FC<StatusChartWidgetProps> = ({
   source,
   showDeleteButton = false,
-  onDelete
+  onDelete,
+  filters
 }) => {
   const sourceName = source === 'clinicaltrials' ? 'ClinicalTrials.gov' : 'EudraCT';
 
@@ -41,6 +43,7 @@ const StatusChartWidget: React.FC<StatusChartWidgetProps> = ({
       }}
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
+      filters={filters}
     />
   );
 };

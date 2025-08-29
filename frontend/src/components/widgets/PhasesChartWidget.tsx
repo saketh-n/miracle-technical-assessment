@@ -1,6 +1,6 @@
 import React from 'react';
 import BaseChartWidget from './BaseChartWidget';
-
+import type { FilterState } from '../FiltersPanel';
 interface PhasesData {
   clinicaltrials_phases: Record<string, number>;
   eudract_phases: Record<string, number>;
@@ -9,11 +9,13 @@ interface PhasesData {
 interface PhasesChartWidgetProps {
   showDeleteButton?: boolean;
   onDelete?: () => void;
+  filters?: FilterState;
 }
 
 const PhasesChartWidget: React.FC<PhasesChartWidgetProps> = ({
   showDeleteButton = false,
-  onDelete
+  onDelete,
+  filters
 }) => {
   return (
     <BaseChartWidget<PhasesData>
@@ -35,6 +37,7 @@ const PhasesChartWidget: React.FC<PhasesChartWidgetProps> = ({
       }
       showDeleteButton={showDeleteButton}
       onDelete={onDelete}
+      filters={filters}
     />
   );
 };
