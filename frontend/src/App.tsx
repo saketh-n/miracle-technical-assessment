@@ -4,6 +4,7 @@ import { FontSizeProvider } from './context/FontSizeContext'
 import WelcomePage from './components/WelcomePage'
 import FontSizeWidget from './components/FontSizeWidget'
 import Charts from './components/Charts'
+import Dashboard from './components/Dashboard' // New import
 import Sidebar from './components/Sidebar'
 import NotFound from './components/NotFound'
 
@@ -17,6 +18,7 @@ function App() {
           <Routes>
             <Route path="/" element={<WelcomePage />} />
             <Route path="/charts" element={<Charts />} />
+            <Route path="/dashboard/:id" element={<Dashboard />} /> {/* New route */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>

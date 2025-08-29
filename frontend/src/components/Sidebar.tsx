@@ -48,6 +48,18 @@ const Sidebar: React.FC = () => {
         >
           Charts
         </NavLink>
+        <NavLink
+          to="/dashboard/1" // Default to dashboard ID 1 for now
+          className={({ isActive }) =>
+            `${menuItem} block px-4 py-2 rounded-lg transition-all duration-200 ${
+              isActive
+                ? 'bg-white/20 text-white font-semibold'
+                : 'hover:bg-white/10 hover:text-white'
+            }`
+          }
+        >
+          Dashboards
+        </NavLink>
       </nav>
     </div>
   );
