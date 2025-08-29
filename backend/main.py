@@ -2,18 +2,21 @@ from fastapi import FastAPI, HTTPException, Query
 from typing import List, Optional
 import requests
 import json
-import pandas as pd
 from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
+import sqlite3
 import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# Global configuration
-NUM_TRIALS = 500
+from db_utils import (
+    create_tables, insert_clinicaltrials_studies, insert_eudract_trials,
+    get_last_updated, update_last_updated, get_study_count,
+    load_studies_from_db, parse_date_flexible, get_db_connection,
+    get_metadata, set_metadata
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,16 +33,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cache files
-CLINICALTRIALS_CACHE = Path("data/clinicaltrials_cache.json")
-EUDRACT_CACHE = Path("data/eudract_data.json")
+# DB paths
+CLINICALTRIALS_DB = Path("data/clinical_trials.db")
+EUDRACT_DB = Path("data/eudract.db")
 
-def fetch_clinicaltrials_data(limit=NUM_TRIALS):
-    """Fetch data from ClinicalTrials.gov API and cache it."""
+# Create tables on startup
+create_tables(str(CLINICALTRIALS_DB))
+create_tables(str(EUDRACT_DB))
+
+def fetch_clinicaltrials_data():
+    """Fetch all data from ClinicalTrials.gov API and store in SQLite, resumable with last_token."""
     try:
+        fetch_complete = get_metadata(str(CLINICALTRIALS_DB), 'fetch_complete')
+        if fetch_complete == 'yes':
+            logger.info("ClinicalTrials.gov fetch is complete; skipping.")
+            return {"data": {"studies": []}, "last_updated": get_last_updated(str(CLINICALTRIALS_DB))}
+
         url = "https://clinicaltrials.gov/api/v2/studies"
         params = {
-            "pageSize": limit,
+            "pageSize": 1000,
             "fields": (
                 "protocolSection.identificationModule.nctId,"
                 "protocolSection.conditionsModule.conditions,"
@@ -52,23 +64,35 @@ def fetch_clinicaltrials_data(limit=NUM_TRIALS):
                 "protocolSection.statusModule.completionDateStruct"
             )
         }
-        logger.info(f"Making request to {url} with params: {params}")
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        last_token = get_metadata(str(CLINICALTRIALS_DB), 'last_token')
+        logger.info(f"Starting/resuming ClinicalTrials.gov fetch from token: {last_token}")
+
+        total_fetched = 0
+        next_token = last_token
+        while True:
+            if next_token:
+                params["pageToken"] = next_token
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            studies = data.get('studies', [])
+            if not studies:
+                set_metadata(str(CLINICALTRIALS_DB), 'fetch_complete', 'yes')
+                set_metadata(str(CLINICALTRIALS_DB), 'last_token', None)
+                break
+            insert_clinicaltrials_studies(studies, str(CLINICALTRIALS_DB))
+            total_fetched += len(studies)
+            logger.info(f"Fetched {len(studies)} ClinicalTrials.gov studies (total new: {total_fetched})")
+            next_token = data.get('nextPageToken')
+            set_metadata(str(CLINICALTRIALS_DB), 'last_token', next_token)
+            if not next_token:
+                set_metadata(str(CLINICALTRIALS_DB), 'fetch_complete', 'yes')
+                break
+            time.sleep(0.2)
         
-        # Ensure data directory exists
-        CLINICALTRIALS_CACHE.parent.mkdir(exist_ok=True)
-        
-        # Save to cache with timestamp
-        data_with_timestamp = {
-            "data": data,
-            "last_updated": datetime.utcnow().isoformat()
-        }
-        with open(CLINICALTRIALS_CACHE, "w") as f:
-            json.dump(data_with_timestamp, f)
-        logger.info(f"Fetched {len(data.get('studies', []))} ClinicalTrials.gov records")
-        return data_with_timestamp
+        update_last_updated(str(CLINICALTRIALS_DB))
+        logger.info(f"Completed/resumed fetching {total_fetched} new ClinicalTrials.gov records")
+        return {"data": {"studies": []}, "last_updated": get_last_updated(str(CLINICALTRIALS_DB))}
     except requests.RequestException as e:
         logger.error(f"Error fetching ClinicalTrials.gov data: {e}")
         return {"error": str(e), "data": None, "last_updated": datetime.utcnow().isoformat()}
@@ -76,19 +100,16 @@ def fetch_clinicaltrials_data(limit=NUM_TRIALS):
 def fetch_eudract_page(page, session):
     """Fetch and parse a single EudraCT page."""
     try:
-        # Load search page to get session cookies
         search_url = f"https://www.clinicaltrialsregister.eu/ctr-search/search?query=&page={page}"
         search_response = session.get(search_url, timeout=10)
         search_response.raise_for_status()
         logger.info(f"Loaded search page {page}: Status {search_response.status_code}")
 
-        # Download full details for current page
         download_url = "https://www.clinicaltrialsregister.eu/ctr-search/rest/download/full?query=&mode=current_page"
         download_response = session.get(download_url, timeout=10)
         download_response.raise_for_status()
         text = download_response.text
         
-        # Parse text into trials
         page_trials = parse_eudract_text(text)
         logger.info(f"Fetched {len(page_trials)} trials from page {page}")
         return page_trials
@@ -124,7 +145,7 @@ def parse_eudract_text(text):
             key = key.strip()
             value = value.strip()
             current_trial[key] = value
-        elif line and current_trial:  # Append to previous value if no key
+        elif line and current_trial:
             last_key = list(current_trial.keys())[-1]
             current_trial[last_key] += " " + line
     
@@ -133,35 +154,18 @@ def parse_eudract_text(text):
     
     return trials
 
-def fetch_eudract_data(limit=NUM_TRIALS, batch_size=5, start_page=1):
-    """Spoof EudraCT download: Fetch and parse full details for {NUM_TRIALS} trials, resumable."""
+def fetch_eudract_data(batch_size=10):
+    """Fetch all EudraCT data, resumable, until no more pages."""
     try:
+        fetch_complete = get_metadata(str(EUDRACT_DB), 'fetch_complete')
+        if fetch_complete == 'yes':
+            logger.info("EudraCT fetch is complete; skipping.")
+            return {"data": {"studies": []}, "last_updated": get_last_updated(str(EUDRACT_DB))}
+
         trials_per_page = 20
-        total_pages_needed = (limit + trials_per_page - 1) // trials_per_page
-        
-        # Load existing cache to resume
-        existing_trials = []
-        last_updated = datetime.utcnow().isoformat()
-        if EUDRACT_CACHE.exists():
-            try:
-                with open(EUDRACT_CACHE, "r") as f:
-                    cache_data = json.load(f)
-                    existing_trials = cache_data.get("data", {}).get("studies", [])
-                    last_updated = cache_data.get("last_updated", last_updated)
-                logger.info(f"Loaded {len(existing_trials)} existing EudraCT trials from cache")
-            except json.JSONDecodeError as e:
-                logger.error(f"Error reading EudraCT cache: {e}")
-                existing_trials = []
-        
-        if len(existing_trials) >= limit:
-            logger.info("Cache already has sufficient trials; no fetch needed")
-            return {"data": {"studies": existing_trials[:limit]}, "last_updated": last_updated}
-        
-        remaining_trials_needed = limit - len(existing_trials)
-        remaining_pages_needed = (remaining_trials_needed + trials_per_page - 1) // trials_per_page
-        start_page = max(start_page, (len(existing_trials) // trials_per_page) + 1)
-        
-        logger.info(f"Resuming EudraCT fetch from page {start_page}; need {remaining_pages_needed} more pages")
+        last_page = get_metadata(str(EUDRACT_DB), 'last_page')
+        start_page = int(last_page) + 1 if last_page else 1
+        logger.info(f"Resuming EudraCT fetch from page {start_page}")
 
         session = requests.Session()
         session.headers.update({
@@ -172,288 +176,84 @@ def fetch_eudract_data(limit=NUM_TRIALS, batch_size=5, start_page=1):
         })
 
         all_new_trials = []
+        page = start_page
         with ThreadPoolExecutor(max_workers=batch_size) as executor:
-            for batch_start in range(0, remaining_pages_needed, batch_size):
-                batch_end = min(batch_start + batch_size, remaining_pages_needed)
-                batch_pages = list(range(start_page + batch_start, start_page + batch_end))
+            while True:
+                batch_pages = list(range(page, page + batch_size))
                 logger.info(f"Fetching batch of pages: {batch_pages}")
                 
-                futures = [executor.submit(fetch_eudract_page, page, session) for page in batch_pages]
+                futures = [executor.submit(fetch_eudract_page, p, session) for p in batch_pages]
+                batch_trials = []
                 for future in as_completed(futures):
                     page_trials = future.result()
-                    all_new_trials.extend(page_trials)
-                    
-                    # Append chunk to cache
-                    existing_trials.extend(page_trials)
-                    EUDRACT_CACHE.parent.mkdir(exist_ok=True)
-                    data_with_timestamp = {
-                        "data": {"studies": existing_trials},
-                        "last_updated": datetime.utcnow().isoformat()
-                    }
-                    with open(EUDRACT_CACHE, "w") as f:
-                        json.dump(data_with_timestamp, f)
-                    logger.info(f"Appended {len(page_trials)} trials to cache (total now: {len(existing_trials)})")
+                    if not page_trials:
+                        set_metadata(str(EUDRACT_DB), 'fetch_complete', 'yes')
+                        set_metadata(str(EUDRACT_DB), 'last_page', str(page - 1))
+                        break
+                    batch_trials.extend(page_trials)
+                    insert_eudract_trials(page_trials, str(EUDRACT_DB))
                 
-                if len(existing_trials) >= limit:
-                    existing_trials = existing_trials[:limit]
+                all_new_trials.extend(batch_trials)
+                if not batch_trials:
                     break
                 
-                time.sleep(3)  # Batch-level delay to avoid rate limiting
+                set_metadata(str(EUDRACT_DB), 'last_page', str(page + batch_size - 1))
+                page += batch_size
+                time.sleep(3)
         
-        logger.info(f"Fetched and cached {len(all_new_trials)} new EudraCT records (total: {len(existing_trials)})")
-        return {"data": {"studies": existing_trials[:limit]}, "last_updated": last_updated}
+        update_last_updated(str(EUDRACT_DB))
+        logger.info(f"Fetched and stored {len(all_new_trials)} new EudraCT records")
+        return {"data": {"studies": []}, "last_updated": get_last_updated(str(EUDRACT_DB))}
     except Exception as e:
         logger.error(f"Error fetching EudraCT data: {e}")
         return {"error": str(e), "data": None, "last_updated": datetime.utcnow().isoformat()}
 
-def parse_date_flexible(date_str: str) -> datetime:
-    """Parse date string with multiple possible formats."""
-    if not date_str:
-        raise ValueError("Empty date string")
-    
-    # Try different date formats
-    formats = ["%Y-%m-%d", "%Y-%m", "%Y"]
-    for fmt in formats:
-        try:
-            return datetime.strptime(date_str, fmt)
-        except ValueError:
-            continue
-    
-    raise ValueError(f"Unable to parse date: {date_str}")
+async def get_clinicaltrials():
+    """Get ClinicalTrials.gov data from SQLite."""
+    studies = load_studies_from_db(str(CLINICALTRIALS_DB), "clinical_trials")
+    return {"data": {"studies": studies}, "last_updated": get_last_updated(str(CLINICALTRIALS_DB))}
 
-def filter_data(ct_data, eu_data=None, region: Optional[str] = None, conditions: Optional[List[str]] = None, start_date: Optional[str] = None, end_date: Optional[str] = None):
-    """Filter clinical trials data based on provided filters."""
-    filtered_ct_data = ct_data.copy() if ct_data else []
-    filtered_eu_data = eu_data.copy() if eu_data else []
-    
-    # Filter by region
-    if region and region != 'ALL':
-        eu_countries = [
-            "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark",
-            "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland",
-            "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands",
-            "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"
-        ]
-        
-        if region == 'US':
-            # Filter ClinicalTrials.gov to US only
-            filtered_ct_data = [
-                study for study in filtered_ct_data
-                if any(loc.get("country", "") == "United States" 
-                      for loc in study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", []))
-            ]
-            # Remove all EudraCT data for US filter
-            filtered_eu_data = []
-            
-        elif region == 'EU':
-            # Filter ClinicalTrials.gov to EU countries only
-            filtered_ct_data = [
-                study for study in filtered_ct_data
-                if any(loc.get("country", "") in eu_countries 
-                      for loc in study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", []))
-            ]
-            # Keep all EudraCT data (it's all EU)
-    
-    # Filter by conditions
-    if conditions and len(conditions) > 0:
-        # Filter ClinicalTrials.gov by conditions
-        filtered_ct_data = [
-            study for study in filtered_ct_data
-            if any(cond in study.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", [])
-                  for cond in conditions)
-        ]
-        
-        # Filter EudraCT by conditions
-        filtered_eu_data = [
-            trial for trial in filtered_eu_data
-            if any(cond in trial.get("E.1.1 Medical condition(s) being investigated", "")
-                  for cond in conditions)
-        ]
-    
-    # Filter by date range
-    if start_date or end_date:
-        if start_date:
-            try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                # Filter ClinicalTrials.gov
-                filtered_ct_data_new = []
-                for study in filtered_ct_data:
-                    study_date_str = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
-                    if study_date_str:
-                        try:
-                            study_date = parse_date_flexible(study_date_str)
-                            if study_date >= start_dt:
-                                filtered_ct_data_new.append(study)
-                        except ValueError:
-                            # Skip studies with unparseable dates
-                            continue
-                filtered_ct_data = filtered_ct_data_new
-                
-                # Filter EudraCT
-                filtered_eu_data_new = []
-                for trial in filtered_eu_data:
-                    trial_date_str = trial.get("Date on which this record was first entered in the EudraCT database", "")
-                    if trial_date_str:
-                        try:
-                            trial_date = parse_date_flexible(trial_date_str)
-                            if trial_date >= start_dt:
-                                filtered_eu_data_new.append(trial)
-                        except ValueError:
-                            # Skip trials with unparseable dates
-                            continue
-                filtered_eu_data = filtered_eu_data_new
-            except ValueError:
-                logger.error(f"Invalid start_date format: {start_date}")
-        
-        if end_date:
-            try:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                # Filter ClinicalTrials.gov
-                filtered_ct_data_new = []
-                for study in filtered_ct_data:
-                    study_date_str = study.get("protocolSection", {}).get("statusModule", {}).get("completionDateStruct", {}).get("date", "")
-                    if study_date_str:
-                        try:
-                            study_date = parse_date_flexible(study_date_str)
-                            if study_date <= end_dt:
-                                filtered_ct_data_new.append(study)
-                        except ValueError:
-                            # Skip studies with unparseable dates
-                            continue
-                    else:
-                        # Include studies without end dates when filtering by end date
-                        filtered_ct_data_new.append(study)
-                filtered_ct_data = filtered_ct_data_new
-                
-                # Filter EudraCT
-                filtered_eu_data_new = []
-                for trial in filtered_eu_data:
-                    trial_date_str = trial.get("P. Date of the global end of the trial", "")
-                    if trial_date_str:
-                        try:
-                            trial_date = parse_date_flexible(trial_date_str)
-                            if trial_date <= end_dt:
-                                filtered_eu_data_new.append(trial)
-                        except ValueError:
-                            # Skip trials with unparseable dates
-                            continue
-                    else:
-                        # Include trials without end dates when filtering by end date
-                        filtered_eu_data_new.append(trial)
-                filtered_eu_data = filtered_eu_data_new
-            except ValueError:
-                logger.error(f"Invalid end_date format: {end_date}")
-    
-    return filtered_ct_data, filtered_eu_data
-
-def load_eudract_data():
-    """Load EudraCT data from static JSON file."""
-    try:
-        if not EUDRACT_CACHE.exists():
-            logger.warning("EudraCT cache file not found, fetching now")
-            result = fetch_eudract_data()
-            if result.get("error"):
-                raise HTTPException(status_code=500, detail=result["error"])
-            return result["data"]["studies"][:NUM_TRIALS]
-        with open(EUDRACT_CACHE, "r") as f:
-            data = json.load(f)
-        logger.info(f"Loaded {len(data.get('data', {}).get('studies', []))} EudraCT records")
-        return data["data"]["studies"][:NUM_TRIALS]
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding EudraCT JSON: {e}")
-        raise HTTPException(status_code=500, detail="Invalid EudraCT data format")
-
-# Initialize scheduler
-scheduler = AsyncIOScheduler()
-
-@app.on_event("startup")
-async def startup_event():
-    """Run initial data fetch for both ClinicalTrials.gov and EudraCT."""
-    logger.info("Starting server and fetching initial data")
-    try:
-        # Fetch ClinicalTrials.gov
-        logger.info("Starting ClinicalTrials.gov fetch")
-        result_ct = fetch_clinicaltrials_data()
-        if result_ct.get("error"):
-            logger.warning("Initial ClinicalTrials.gov fetch failed, but server will continue")
-        else:
-            scheduler.add_job(fetch_clinicaltrials_data, "interval", hours=24)
-            scheduler.start()
-            logger.info("Scheduler started for ClinicalTrials.gov data refresh every 24 hours")
-        
-        # Fetch EudraCT if cache missing or incomplete
-        logger.info("Checking EudraCT cache")
-        existing_trials = []
-        if EUDRACT_CACHE.exists():
-            try:
-                with open(EUDRACT_CACHE, "r") as f:
-                    cache_data = json.load(f)
-                    existing_trials = cache_data.get("data", {}).get("studies", [])
-                logger.info(f"EudraCT cache found with {len(existing_trials)} trials")
-            except json.JSONDecodeError as e:
-                logger.error(f"Error reading EudraCT cache: {e}")
-                existing_trials = []
-        
-        if len(existing_trials) < NUM_TRIALS:
-            logger.info(f"EudraCT cache incomplete ({len(existing_trials)} trials), starting fetch from page {(len(existing_trials) // 20) + 1}")
-            result_eu = fetch_eudract_data(limit=NUM_TRIALS, start_page=(len(existing_trials) // 20) + 1)
-            if result_eu.get("error"):
-                logger.warning("Initial EudraCT fetch failed, but server will continue")
-            else:
-                logger.info("EudraCT fetch completed successfully")
-        else:
-            logger.info("EudraCT cache has sufficient trials, skipping fetch")
-    except Exception as e:
-        logger.error(f"Startup error: {e}")
-        logger.warning("Continuing server startup despite data fetch error")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Shutdown scheduler."""
-    scheduler.shutdown()
-    logger.info("Scheduler shut down")
+async def get_eudract():
+    """Get EudraCT data from SQLite."""
+    studies = load_studies_from_db(str(EUDRACT_DB), "eudract_trials")
+    return {"data": {"studies": studies}, "last_updated": get_last_updated(str(EUDRACT_DB))}
 
 @app.get("/clinicaltrials")
-async def get_clinicaltrials():
+async def get_clinicaltrials_endpoint():
     """Retrieve cached ClinicalTrials.gov data."""
     try:
-        if CLINICALTRIALS_CACHE.exists():
-            with open(CLINICALTRIALS_CACHE, "r") as f:
-                return json.load(f)
-        result = fetch_clinicaltrials_data()
-        if result.get("error"):
-            raise HTTPException(status_code=500, detail=result["error"])
-        return result
+        studies = load_studies_from_db(str(CLINICALTRIALS_DB), "clinical_trials")
+        return {"data": {"studies": studies}, "last_updated": get_last_updated(str(CLINICALTRIALS_DB))}
     except Exception as e:
         logger.error(f"Error serving ClinicalTrials.gov data: {e}")
         raise HTTPException(status_code=500, detail="Error retrieving ClinicalTrials.gov data")
 
 @app.get("/eudract")
-async def get_eudract():
+async def get_eudract_endpoint():
     """Retrieve cached EudraCT data."""
     try:
-        if EUDRACT_CACHE.exists():
-            with open(EUDRACT_CACHE, "r") as f:
-                return json.load(f)
-        result = fetch_eudract_data()
-        if result.get("error"):
-            raise HTTPException(status_code=500, detail=result["error"])
-        return result
+        studies = load_studies_from_db(str(EUDRACT_DB), "eudract_trials")
+        return {"data": {"studies": studies}, "last_updated": get_last_updated(str(EUDRACT_DB))}
     except Exception as e:
         logger.error(f"Error serving EudraCT data: {e}")
         raise HTTPException(status_code=500, detail="Error retrieving EudraCT data")
 
 @app.post("/refresh")
 async def refresh_data():
-    """Manually refresh ClinicalTrials.gov data."""
+    """Manually ClinicalTrials.gov data."""
     try:
-        result = fetch_clinicaltrials_data()
-        if result.get("error"):
-            raise HTTPException(status_code=500, detail=result["error"])
+        # Reset fetch status
+        set_metadata(str(CLINICALTRIALS_DB), 'fetch_complete', None)
+        
+        result_ct = fetch_clinicaltrials_data()
+        
+        if result_ct.get("error"):
+            raise HTTPException(status_code=500, detail="Error during refresh: " + result_ct.get("error"))
+        
         return {
             "status": "Data refreshed",
-            "total_records": len(result["data"].get("studies", [])),
-            "last_updated": result["last_updated"]
+            "clinicaltrials_records": get_study_count(str(CLINICALTRIALS_DB), "clinical_trials"),
+            "last_updated": get_last_updated(str(CLINICALTRIALS_DB))
         }
     except Exception as e:
         logger.error(f"Error refreshing data: {e}")
@@ -468,20 +268,57 @@ async def get_totals(
 ):
     """Get total number of trials from both sources with optional filters."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # Apply filters
-        filtered_ct_data, filtered_eu_data = filter_data(
-            ct_data, eu_data, region, conditions, start_date, end_date
-        )
-        
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = "SELECT COUNT(*) FROM clinical_trials WHERE 1=1"
+        eu_query = "SELECT COUNT(*) FROM eudract_trials WHERE 1=1"
+        params_ct = []
+        params_eu = []
+
+        if start_date:
+            ct_query += " AND start_date >= ?"
+            eu_query += " AND start_date >= ?"
+            params_ct.append(start_date)
+            params_eu.append(start_date)
+        if end_date:
+            ct_query += " AND completion_date <= ?"
+            eu_query += " AND end_date <= ?"
+            params_ct.append(end_date)
+            params_eu.append(end_date)
+        if conditions:
+            for cond in conditions:
+                ct_query += " AND conditions LIKE ?"
+                params_ct.append(f"%{cond}%")
+                eu_query += " AND condition LIKE ?"
+                params_eu.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States')"
+                eu_query += " AND EXISTS (SELECT 1 WHERE 0)"  # No US trials in EudraCT
+            elif region == "EU":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN ('Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden'))"
+                eu_query += " AND 1=1"  # EudraCT is EU-only
+
+        ct_cursor.execute(ct_query, params_ct)
+        eu_cursor.execute(eu_query, params_eu)
+        ct_total = ct_cursor.fetchone()[0]
+        eu_total = eu_cursor.fetchone()[0]
+
+        ct_conn.close()
+        eu_conn.close()
+
         return {
-            "clinicaltrials_total": len(filtered_ct_data),
-            "eudract_total": len(filtered_eu_data)
+            "clinicaltrials_total": ct_total,
+            "eudract_total": eu_total
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in totals: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Error calculating totals: {e}")
+        logger.error(f"Error calculating totals: {str(e)}")
         raise HTTPException(status_code=500, detail="Error calculating totals")
 
 @app.get("/aggregations/by_condition")
@@ -493,37 +330,66 @@ async def get_by_condition(
 ):
     """Aggregate trials by condition with optional filters."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # Apply filters
-        filtered_ct_data, filtered_eu_data = filter_data(
-            ct_data, eu_data, region, conditions, start_date, end_date
-        )
-        
-        # ClinicalTrials.gov conditions
-        ct_conditions = {}
-        for study in filtered_ct_data:
-            conditions_list = study.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", [])
-            for cond in conditions_list:
-                if cond and isinstance(cond, str) and cond.strip():  # Ensure valid condition
-                    ct_conditions[cond] = ct_conditions.get(cond, 0) + 1
-        ct_conditions = dict(sorted(ct_conditions.items(), key=lambda x: x[1], reverse=True)[:10])
-        
-        # EudraCT conditions
-        eu_conditions = {}
-        for trial in filtered_eu_data:
-            condition = trial.get("E.1.1 Medical condition(s) being investigated", None)
-            if condition and isinstance(condition, str) and condition.strip():  # Ensure valid condition
-                eu_conditions[condition] = eu_conditions.get(condition, 0) + 1
-            else:
-                logger.debug(f"Skipping trial {trial.get('EudraCT Number', 'unknown')} due to missing or invalid condition")
-        eu_conditions = dict(sorted(eu_conditions.items(), key=lambda x: x[1], reverse=True)[:10])
-        
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = """
+            SELECT json_extract(value, '$') as cond, COUNT(*) as count
+            FROM clinical_trials, json_each(conditions)
+            WHERE cond IS NOT NULL AND cond != ''
+        """
+        eu_query = """
+            SELECT condition as cond, COUNT(*) as count
+            FROM eudract_trials
+            WHERE condition IS NOT NULL AND condition != ''
+        """
+        params_ct = []
+        params_eu = []
+
+        if start_date:
+            ct_query += " AND start_date >= ?"
+            eu_query += " AND start_date >= ?"
+            params_ct.append(start_date)
+            params_eu.append(start_date)
+        if end_date:
+            ct_query += " AND completion_date <= ?"
+            eu_query += " AND end_date <= ?"
+            params_ct.append(end_date)
+            params_eu.append(end_date)
+        if conditions:
+            for cond in conditions:
+                ct_query += " AND conditions LIKE ?"
+                params_ct.append(f"%{cond}%")
+                eu_query += " AND condition LIKE ?"
+                params_eu.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States')"
+                eu_query += " AND EXISTS (SELECT 1 WHERE 0)"
+            elif region == "EU":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN ('Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden'))"
+                eu_query += " AND 1=1"
+
+        ct_query += " GROUP BY cond ORDER BY count DESC LIMIT 10"
+        eu_query += " GROUP BY cond ORDER BY count DESC LIMIT 10"
+
+        ct_cursor.execute(ct_query, params_ct)
+        eu_cursor.execute(eu_query, params_eu)
+        ct_conditions = dict(ct_cursor.fetchall())
+        eu_conditions = dict(eu_cursor.fetchall())
+
+        ct_conn.close()
+        eu_conn.close()
+
         return {
             "clinicaltrials_conditions": ct_conditions,
             "eudract_conditions": eu_conditions
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in by_condition: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error aggregating by condition: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error aggregating by condition: {str(e)}")
@@ -537,36 +403,66 @@ async def get_by_sponsor(
 ):
     """Aggregate trials by sponsor (top 10) with optional filters."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # Apply filters
-        filtered_ct_data, filtered_eu_data = filter_data(
-            ct_data, eu_data, region, conditions, start_date, end_date
-        )
-        
-        # ClinicalTrials.gov sponsors
-        ct_sponsors = {}
-        for study in filtered_ct_data:
-            sponsor = study.get("protocolSection", {}).get("sponsorCollaboratorsModule", {}).get("leadSponsor", {}).get("name", "Unknown")
-            if sponsor and isinstance(sponsor, str) and sponsor.strip():  # Ensure valid sponsor
-                ct_sponsors[sponsor] = ct_sponsors.get(sponsor, 0) + 1
-        ct_sponsors = dict(sorted(ct_sponsors.items(), key=lambda x: x[1], reverse=True)[:10])
-        
-        # EudraCT sponsors
-        eu_sponsors = {}
-        for trial in filtered_eu_data:
-            sponsor = trial.get("B.1.1 Name of Sponsor", "Unknown")
-            if sponsor and isinstance(sponsor, str) and sponsor.strip():  # Ensure valid sponsor
-                eu_sponsors[sponsor] = eu_sponsors.get(sponsor, 0) + 1
-            else:
-                logger.debug(f"Skipping trial {trial.get('EudraCT Number', 'unknown')} due to missing or invalid sponsor")
-        eu_sponsors = dict(sorted(eu_sponsors.items(), key=lambda x: x[1], reverse=True)[:10])
-        
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = """
+            SELECT sponsor as sponsor, COUNT(*) as count
+            FROM clinical_trials
+            WHERE sponsor IS NOT NULL AND sponsor != ''
+        """
+        eu_query = """
+            SELECT sponsor as sponsor, COUNT(*) as count
+            FROM eudract_trials
+            WHERE sponsor IS NOT NULL AND sponsor != ''
+        """
+        params_ct = []
+        params_eu = []
+
+        if start_date:
+            ct_query += " AND start_date >= ?"
+            eu_query += " AND start_date >= ?"
+            params_ct.append(start_date)
+            params_eu.append(start_date)
+        if end_date:
+            ct_query += " AND completion_date <= ?"
+            eu_query += " AND end_date <= ?"
+            params_ct.append(end_date)
+            params_eu.append(end_date)
+        if conditions:
+            for cond in conditions:
+                ct_query += " AND conditions LIKE ?"
+                params_ct.append(f"%{cond}%")
+                eu_query += " AND condition LIKE ?"
+                params_eu.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States')"
+                eu_query += " AND EXISTS (SELECT 1 WHERE 0)"
+            elif region == "EU":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN ('Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden'))"
+                eu_query += " AND 1=1"
+
+        ct_query += " GROUP BY sponsor ORDER BY count DESC LIMIT 10"
+        eu_query += " GROUP BY sponsor ORDER BY count DESC LIMIT 10"
+
+        ct_cursor.execute(ct_query, params_ct)
+        eu_cursor.execute(eu_query, params_eu)
+        ct_sponsors = dict(ct_cursor.fetchall())
+        eu_sponsors = dict(eu_cursor.fetchall())
+
+        ct_conn.close()
+        eu_conn.close()
+
         return {
             "clinicaltrials_sponsors": ct_sponsors,
             "eudract_sponsors": eu_sponsors
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in by_sponsor: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error aggregating by sponsor: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error aggregating by sponsor: {str(e)}")
@@ -580,50 +476,92 @@ async def get_enrollment_by_region(
 ):
     """Aggregate enrollment totals by region (US, EU, Others) with optional filters."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # Apply filters
-        filtered_ct_data, filtered_eu_data = filter_data(
-            ct_data, eu_data, region, conditions, start_date, end_date
-        )
-        
-        # ClinicalTrials.gov: Parse locations for US/EU/Others
-        ct_enrollment = {"US": 0, "EU": 0, "Others": 0}
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
         eu_countries = [
-            "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark",
+            "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic", "Denmark",
             "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland",
             "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands",
             "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"
         ]
-        for study in filtered_ct_data:
-            enrollment = study.get("protocolSection", {}).get("designModule", {}).get("enrollmentInfo", {}).get("count", 0) or 0
-            locations = study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", [])
-            is_us = any(loc.get("country", "") == "United States" for loc in locations)
-            is_eu = any(loc.get("country", "") in eu_countries for loc in locations)
-            if is_us:
-                ct_enrollment["US"] += enrollment
-            elif is_eu:
-                ct_enrollment["EU"] += enrollment
-            else:
-                ct_enrollment["Others"] += enrollment
-        
-        # EudraCT: Assume EU unless marked "Outside EU/EEA"
-        eu_enrollment = {"EU": 0, "Others": 0}
-        for trial in filtered_eu_data:
-            enrollment_str = trial.get("F.4.2.2 In the whole clinical trial", "0")
-            enrollment = int(enrollment_str) if enrollment_str.isdigit() else 0
-            if trial.get("Trial protocol", "").endswith("Outside EU/EEA"):
-                eu_enrollment["Others"] += enrollment
-            else:
-                eu_enrollment["EU"] += enrollment
-        
+
+        ct_query = """
+            SELECT
+                CASE
+                    WHEN EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States') THEN 'US'
+                    WHEN EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN (%s)) THEN 'EU'
+                    ELSE 'Others'
+                END as region,
+                SUM(enrollment) as total
+            FROM clinical_trials
+            WHERE 1=1
+        """ % ",".join(["?"] * len(eu_countries))
+        eu_query = """
+            SELECT
+                CASE
+                    WHEN trial_protocol LIKE '%Outside EU/EEA' THEN 'Others'
+                    ELSE 'EU'
+                END as region,
+                SUM(enrollment) as total
+            FROM eudract_trials
+            WHERE 1=1
+        """
+        params_ct = eu_countries[:]
+        params_eu = []
+
+        if start_date:
+            ct_query += " AND start_date >= ?"
+            eu_query += " AND start_date >= ?"
+            params_ct.append(start_date)
+            params_eu.append(start_date)
+        if end_date:
+            ct_query += " AND completion_date <= ?"
+            eu_query += " AND end_date <= ?"
+            params_ct.append(end_date)
+            params_eu.append(end_date)
+        if conditions:
+            for cond in conditions:
+                ct_query += " AND conditions LIKE ?"
+                params_ct.append(f"%{cond}%")
+                eu_query += " AND condition LIKE ?"
+                params_eu.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States')"
+                eu_query += " AND EXISTS (SELECT 1 WHERE 0)"
+            elif region == "EU":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN (%s))" % ",".join(["?"] * len(eu_countries))
+                params_ct.extend(eu_countries)
+                eu_query += " AND 1=1"
+
+        ct_query += " GROUP BY region"
+        eu_query += " GROUP BY region"
+
+        ct_cursor.execute(ct_query, params_ct)
+        eu_cursor.execute(eu_query, params_eu)
+        ct_enrollment = dict(ct_cursor.fetchall())
+        eu_enrollment = dict(eu_cursor.fetchall())
+
+        # Ensure all regions are present
+        regions = ["US", "EU", "Others"]
+        ct_enrollment = {r: ct_enrollment.get(r, 0) for r in regions}
+        eu_enrollment = {r: eu_enrollment.get(r, 0) for r in regions}
+
+        ct_conn.close()
+        eu_conn.close()
+
         return {
             "clinicaltrials_enrollment": ct_enrollment,
             "eudract_enrollment": eu_enrollment
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in enrollment_by_region: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Error aggregating enrollment by region: {e}")
+        logger.error(f"Error aggregating enrollment by region: {str(e)}")
         raise HTTPException(status_code=500, detail="Error aggregating enrollment by region")
 
 @app.get("/aggregations/by_status")
@@ -633,38 +571,68 @@ async def get_by_status(
     start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
 ):
-    """Aggregate trials by status (Completed, Recruiting, Unknown) with optional filters."""
+    """Aggregate trials by status with optional filters."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # Apply filters
-        filtered_ct_data, filtered_eu_data = filter_data(
-            ct_data, eu_data, region, conditions, start_date, end_date
-        )
-        
-        # ClinicalTrials.gov statuses
-        ct_statuses = {"Completed": 0, "Recruiting": 0, "Unknown": 0}
-        for study in filtered_ct_data:
-            status = study.get("protocolSection", {}).get("statusModule", {}).get("overallStatus", "Unknown")
-            if status == "COMPLETED":
-                ct_statuses["Completed"] += 1
-            elif status == "RECRUITING":
-                ct_statuses["Recruiting"] += 1
-            else:
-                ct_statuses["Unknown"] += 1
-        
-        # EudraCT statuses
-        eu_statuses = {}
-        for trial in filtered_eu_data:
-            status = trial.get("P. End of Trial Status")
-            if status and isinstance(status, str) and status.strip():
-                eu_statuses[status] = eu_statuses.get(status, 0) + 1;
-        
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = """
+            SELECT status, COUNT(*) as count
+            FROM clinical_trials
+            WHERE status IS NOT NULL AND status != ''
+        """
+        eu_query = """
+            SELECT "P. End of Trial Status" as status, COUNT(*) as count
+            FROM eudract_trials
+            WHERE "P. End of Trial Status" IS NOT NULL AND "P. End of Trial Status" != ''
+        """
+        params_ct = []
+        params_eu = []
+
+        if start_date:
+            ct_query += " AND start_date >= ?"
+            eu_query += " AND start_date >= ?"
+            params_ct.append(start_date)
+            params_eu.append(start_date)
+        if end_date:
+            ct_query += " AND completion_date <= ?"
+            eu_query += " AND end_date <= ?"
+            params_ct.append(end_date)
+            params_eu.append(end_date)
+        if conditions:
+            for cond in conditions:
+                ct_query += " AND conditions LIKE ?"
+                params_ct.append(f"%{cond}%")
+                eu_query += " AND condition LIKE ?"
+                params_eu.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States')"
+                eu_query += " AND EXISTS (SELECT 1 WHERE 0)"
+            elif region == "EU":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN ('Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden'))"
+                eu_query += " AND 1=1"
+
+        ct_query += " GROUP BY status"
+        eu_query += " GROUP BY status"
+
+        ct_cursor.execute(ct_query, params_ct)
+        eu_cursor.execute(eu_query, params_eu)
+        ct_statuses = dict(ct_cursor.fetchall())
+        eu_statuses = dict(eu_cursor.fetchall())
+
+        ct_conn.close()
+        eu_conn.close()
+
         return {
             "clinicaltrials_statuses": ct_statuses,
             "eudract_statuses": eu_statuses
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in by_status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error aggregating by status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error aggregating by status: {str(e)}")
@@ -676,55 +644,79 @@ async def get_by_phase(
     start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
 ):
-    """Aggregate trials by phase (I, II, III, IV) with optional filters."""
+    """Aggregate trials by phase with optional filters."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # Apply filters
-        filtered_ct_data, filtered_eu_data = filter_data(
-            ct_data, eu_data, region, conditions, start_date, end_date
-        )
-        
-        # ClinicalTrials.gov phases
-        ct_phases = {"Phase I": 0, "Phase II": 0, "Phase III": 0, "Phase IV": 0}
-        for study in filtered_ct_data:
-            phases = study.get("protocolSection", {}).get("designModule", {}).get("phases", [])
-            if not isinstance(phases, list):  # Handle unexpected non-array cases
-                phases = [phases] if phases else []
-            for phase in phases:
-                if phase in ["PHASE1", "EARLY_PHASE1"]:
-                    ct_phases["Phase I"] += 1
-                elif phase == "PHASE2":
-                    ct_phases["Phase II"] += 1
-                elif phase == "PHASE3":
-                    ct_phases["Phase III"] += 1
-                elif phase == "PHASE4":
-                    ct_phases["Phase IV"] += 1
-        
-        # EudraCT phases (extract from title)
-        eu_phases = {"Phase I": 0, "Phase II": 0, "Phase III": 0, "Phase IV": 0}
-        phase_pattern = r'(?:phase|Phase)\s*(?:I{1,3}|IV|1(?:/2)?(?:/3)?(?:/4)?|2(?:/3)?(?:/4)?|3(?:/4)?|4)\b'
-        for trial in filtered_eu_data:
-            title = trial.get("A.3 Full title of the trial", "")
-            if title and isinstance(title, str):
-                matches = re.findall(phase_pattern, title, re.IGNORECASE)
-                for match in matches:
-                    # Normalize phase mentions to match eu_phases keys
-                    normalized = match.lower()
-                    if any(p in normalized for p in ['i', '1']):
-                        eu_phases["Phase I"] += 1
-                    if any(p in normalized for p in ['ii', '2']):
-                        eu_phases["Phase II"] += 1
-                    if any(p in normalized for p in ['iii', '3']):
-                        eu_phases["Phase III"] += 1
-                    if any(p in normalized for p in ['iv', '4']):
-                        eu_phases["Phase IV"] += 1
-        
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = """
+            SELECT json_extract(value, '$') as phase, COUNT(*) as count
+            FROM clinical_trials, json_each(phases)
+            WHERE phase IS NOT NULL AND phase != ''
+        """
+        eu_query = """
+            SELECT CASE
+                WHEN "A.3 Full title of the trial" LIKE '%Phase I%' THEN 'Phase I'
+                WHEN "A.3 Full title of the trial" LIKE '%Phase II%' THEN 'Phase II'
+                WHEN "A.3 Full title of the trial" LIKE '%Phase III%' THEN 'Phase III'
+                WHEN "A.3 Full title of the trial" LIKE '%Phase IV%' THEN 'Phase IV'
+                ELSE NULL
+            END as phase, COUNT(*) as count
+            FROM eudract_trials
+            WHERE phase IS NOT NULL
+        """
+        params_ct = []
+        params_eu = []
+
+        if start_date:
+            ct_query += " AND start_date >= ?"
+            eu_query += " AND start_date >= ?"
+            params_ct.append(start_date)
+            params_eu.append(start_date)
+        if end_date:
+            ct_query += " AND completion_date <= ?"
+            eu_query += " AND end_date <= ?"
+            params_ct.append(end_date)
+            params_eu.append(end_date)
+        if conditions:
+            for cond in conditions:
+                ct_query += " AND conditions LIKE ?"
+                params_ct.append(f"%{cond}%")
+                eu_query += " AND condition LIKE ?"
+                params_eu.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States')"
+                eu_query += " AND EXISTS (SELECT 1 WHERE 0)"
+            elif region == "EU":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN ('Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden'))"
+                eu_query += " AND 1=1"
+
+        ct_query += " GROUP BY phase"
+        eu_query += " GROUP BY phase"
+
+        ct_cursor.execute(ct_query, params_ct)
+        eu_cursor.execute(eu_query, params_eu)
+        ct_phases = dict(ct_cursor.fetchall())
+        eu_phases = dict(eu_cursor.fetchall())
+
+        # Normalize phases
+        phases = ["Phase I", "Phase II", "Phase III", "Phase IV"]
+        ct_phases_normalized = {p: ct_phases.get(p, 0) for p in phases}
+        eu_phases_normalized = {p: eu_phases.get(p, 0) for p in phases}
+
+        ct_conn.close()
+        eu_conn.close()
+
         return {
-            "clinicaltrials_phases": ct_phases,
-            "eudract_phases": eu_phases
+            "clinicaltrials_phases": ct_phases_normalized,
+            "eudract_phases": eu_phases_normalized
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in by_phase: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error aggregating by phase: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error aggregating by phase: {str(e)}")
@@ -736,47 +728,72 @@ async def get_by_year(
     start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
 ):
-    """Aggregate cumulative enrollment by trial start year with optional filters."""
+    """Aggregate cumulative enrollment by year with optional filters."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # Apply filters
-        filtered_ct_data, filtered_eu_data = filter_data(
-            ct_data, eu_data, region, conditions, start_date, end_date
-        )
-        
-        # ClinicalTrials.gov enrollment by year
-        ct_years = {}
-        for study in filtered_ct_data:
-            start_date = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
-            enrollment = study.get("protocolSection", {}).get("designModule", {}).get("enrollmentInfo", {}).get("count", 0) or 0
-            if start_date:
-                year = start_date[:4]
-                if year.isdigit():
-                    ct_years[year] = ct_years.get(year, 0) + enrollment
-        
-        # EudraCT enrollment by year
-        eu_years = {}
-        for trial in filtered_eu_data:
-            start_date = trial.get("Date on which this record was first entered in the EudraCT database", "")
-            enrollment = int(trial.get("F.4.2.2 In the whole clinical trial", "0")) if trial.get("F.4.2.2 In the whole clinical trial", "0").isdigit() else 0
-            if start_date:
-                try:
-                    year = parse_date_flexible(start_date).year
-                    eu_years[str(year)] = eu_years.get(str(year), 0) + enrollment
-                except ValueError:
-                    continue
-        
-        # Sort years and prepare data
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = """
+            SELECT strftime('%Y', start_date) as year, SUM(enrollment) as total
+            FROM clinical_trials
+            WHERE start_date IS NOT NULL
+        """
+        eu_query = """
+            SELECT strftime('%Y', start_date) as year, SUM(enrollment) as total
+            FROM eudract_trials
+            WHERE start_date IS NOT NULL
+        """
+        params_ct = []
+        params_eu = []
+
+        if start_date:
+            ct_query += " AND start_date >= ?"
+            eu_query += " AND start_date >= ?"
+            params_ct.append(start_date)
+            params_eu.append(start_date)
+        if end_date:
+            ct_query += " AND completion_date <= ?"
+            eu_query += " AND end_date <= ?"
+            params_ct.append(end_date)
+            params_eu.append(end_date)
+        if conditions:
+            for cond in conditions:
+                ct_query += " AND conditions LIKE ?"
+                params_ct.append(f"%{cond}%")
+                eu_query += " AND condition LIKE ?"
+                params_eu.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States')"
+                eu_query += " AND EXISTS (SELECT 1 WHERE 0)"
+            elif region == "EU":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN ('Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden'))"
+                eu_query += " AND 1=1"
+
+        ct_query += " GROUP BY year"
+        eu_query += " GROUP BY year"
+
+        ct_cursor.execute(ct_query, params_ct)
+        eu_cursor.execute(eu_query, params_eu)
+        ct_years = dict(ct_cursor.fetchall())
+        eu_years = dict(eu_cursor.fetchall())
+
         all_years = sorted(set(list(ct_years.keys()) + list(eu_years.keys())))
         ct_data_sorted = {year: ct_years.get(year, 0) for year in all_years}
         eu_data_sorted = {year: eu_years.get(year, 0) for year in all_years}
-        
+
+        ct_conn.close()
+        eu_conn.close()
+
         return {
             "clinicaltrials_years": ct_data_sorted,
             "eudract_years": eu_data_sorted
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in by_year: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error aggregating by year: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error aggregating by year: {str(e)}")
@@ -790,23 +807,40 @@ async def get_by_country(
 ):
     """Aggregate trials by country (top 10) for ClinicalTrials.gov with optional filters."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        
-        # Apply filters (no eu_data needed for country aggregation)
-        filtered_ct_data, _ = filter_data(
-            ct_data, None, region, conditions, start_date, end_date
-        )
-        
-        ct_countries = {}
-        for study in filtered_ct_data:
-            locations = study.get("protocolSection", {}).get("contactsLocationsModule", {}).get("locations", [])
-            for loc in locations:
-                country = loc.get("country", "Unknown")
-                if country and isinstance(country, str) and country.strip():
-                    ct_countries[country] = ct_countries.get(country, 0) + 1
-        ct_countries = dict(sorted(ct_countries.items(), key=lambda x: x[1], reverse=True)[:10])
-        
+        conn = get_db_connection(str(CLINICALTRIALS_DB))
+        cursor = conn.cursor()
+        query = """
+            SELECT json_extract(value, '$.country') as country, COUNT(*) as count
+            FROM clinical_trials, json_each(locations)
+            WHERE country IS NOT NULL AND country != ''
+        """
+        params = []
+        if start_date:
+            query += " AND start_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND completion_date <= ?"
+            params.append(end_date)
+        if conditions:
+            for cond in conditions:
+                query += " AND conditions LIKE ?"
+                params.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                query += " AND json_extract(value, '$.country') = 'United States'"
+            elif region == "EU":
+                query += " AND json_extract(value, '$.country') IN ('Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden')"
+
+        query += " GROUP BY country ORDER BY count DESC LIMIT 10"
+
+        cursor.execute(query, params)
+        ct_countries = dict(cursor.fetchall())
+        conn.close()
+
         return {"clinicaltrials_countries": ct_countries}
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in by_country: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error aggregating by country: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error aggregating by country: {str(e)}")
@@ -815,84 +849,80 @@ async def get_by_country(
 async def get_conditions():
     """Get all unique conditions from both ClinicalTrials.gov and EudraCT data."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # ClinicalTrials.gov conditions
-        ct_conditions = set()
-        for study in ct_data:
-            conditions = study.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", [])
-            for cond in conditions:
-                if cond and isinstance(cond, str) and cond.strip():  # Ensure valid condition
-                    ct_conditions.add(cond.strip())
-        
-        # EudraCT conditions
-        eu_conditions = set()
-        for trial in eu_data:
-            condition = trial.get("E.1.1 Medical condition(s) being investigated", None)
-            if condition and isinstance(condition, str) and condition.strip():  # Ensure valid condition
-                eu_conditions.add(condition.strip())
-        
-        # Combine and sort all conditions
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = """
+            SELECT DISTINCT json_extract(value, '$') as cond
+            FROM clinical_trials, json_each(conditions)
+            WHERE cond IS NOT NULL AND cond != ''
+        """
+        eu_query = """
+            SELECT DISTINCT condition as cond
+            FROM eudract_trials
+            WHERE condition IS NOT NULL AND condition != ''
+        """
+        ct_cursor.execute(ct_query)
+        eu_cursor.execute(eu_query)
+        ct_conditions = {row['cond'].strip() for row in ct_cursor.fetchall()}
+        eu_conditions = {row['cond'].strip() for row in eu_cursor.fetchall()}
+
+        ct_conn.close()
+        eu_conn.close()
+
         all_conditions = sorted(ct_conditions.union(eu_conditions))
         
         return {
             "conditions": all_conditions,
             "total_count": len(all_conditions)
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in conditions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting conditions: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting conditions: {str(e)}")
 
 @app.get("/min_max_date")
 async def get_min_and_max_date():
-    """Get the earliest and latest dates across both ClinicalTrials.gov and EudraCT data."""
+    """Get min/max dates using SQL."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        dates = []
-        
-        # ClinicalTrials.gov dates
-        for study in ct_data:
-            start_date = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
-            end_date = study.get("protocolSection", {}).get("statusModule", {}).get("completionDateStruct", {}).get("date", "")
-            if start_date:
-                try:
-                    dates.append(parse_date_flexible(start_date))
-                except ValueError:
-                    continue
-            if end_date:
-                try:
-                    dates.append(parse_date_flexible(end_date))
-                except ValueError:
-                    continue
-        
-        # EudraCT dates
-        for trial in eu_data:
-            start_date = trial.get("Date on which this record was first entered in the EudraCT database", "")
-            end_date = trial.get("P. Date of the global end of the trial", "")
-            if start_date:
-                try:
-                    dates.append(parse_date_flexible(start_date))
-                except ValueError:
-                    continue
-            if end_date:
-                try:
-                    dates.append(parse_date_flexible(end_date))
-                except ValueError:
-                    continue
-        
-        if not dates:
-            return {
-                "min_date": None,
-                "max_date": None
-            }
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = """
+            SELECT MIN(start_date), MAX(completion_date)
+            FROM clinical_trials
+            WHERE start_date IS NOT NULL
+        """
+        eu_query = """
+            SELECT MIN(start_date), MAX(end_date)
+            FROM eudract_trials
+            WHERE start_date IS NOT NULL
+        """
+        ct_cursor.execute(ct_query)
+        eu_cursor.execute(eu_query)
+        ct_min, ct_max = ct_cursor.fetchone()
+        eu_min, eu_max = eu_cursor.fetchone()
+
+        ct_conn.close()
+        eu_conn.close()
+
+        all_dates = [d for d in [ct_min, ct_max, eu_min, eu_max] if d]
+        if not all_dates:
+            return {"min_date": None, "max_date": None}
         
         return {
-            "min_date": min(dates).strftime("%Y-%m-%d"),
-            "max_date": max(dates).strftime("%Y-%m-%d")
+            "min_date": min(all_dates),
+            "max_date": max(all_dates)
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in min_max_date: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting min/max dates: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting min/max dates: {str(e)}")
@@ -904,75 +934,107 @@ async def get_by_duration(
     start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)")
 ):
-    """Aggregate trials by duration bins with optional filters."""
+    """Aggregate trials by duration bins using SQL."""
     try:
-        ct_data = (await get_clinicaltrials())["data"].get("studies", [])
-        eu_data = (await get_eudract())["data"].get("studies", [])
-        
-        # Apply filters
-        filtered_ct_data, filtered_eu_data = filter_data(
-            ct_data, eu_data, region, conditions, start_date, end_date
-        )
-        
-        bins = {
-            "<1 year": 0,
-            "1-2 years": 0,
-            "2-3 years": 0,
-            "3-5 years": 0,
-            ">5 years": 0
-        }
-        ct_durations = bins.copy()
-        eu_durations = bins.copy()
-        
-        # ClinicalTrials.gov durations
-        for study in filtered_ct_data:
-            start_date = study.get("protocolSection", {}).get("statusModule", {}).get("startDateStruct", {}).get("date", "")
-            end_date = study.get("protocolSection", {}).get("statusModule", {}).get("completionDateStruct", {}).get("date", "")
-            if start_date and end_date:
-                try:
-                    start = parse_date_flexible(start_date)
-                    end = parse_date_flexible(end_date)
-                    months = (end.year - start.year) * 12 + end.month - start.month
-                    if months < 12:
-                        ct_durations["<1 year"] += 1
-                    elif months < 24:
-                        ct_durations["1-2 years"] += 1
-                    elif months < 36:
-                        ct_durations["2-3 years"] += 1
-                    elif months < 60:
-                        ct_durations["3-5 years"] += 1
-                    else:
-                        ct_durations[">5 years"] += 1
-                except ValueError:
-                    continue
-        
-        # EudraCT durations
-        for trial in filtered_eu_data:
-            start_date = trial.get("Date on which this record was first entered in the EudraCT database", "")
-            end_date = trial.get("P. Date of the global end of the trial", "")
-            if start_date and end_date:
-                try:
-                    start = parse_date_flexible(start_date)
-                    end = parse_date_flexible(end_date)
-                    months = (end.year - start.year) * 12 + end.month - start.month
-                    if months < 12:
-                        eu_durations["<1 year"] += 1
-                    elif months < 24:
-                        eu_durations["1-2 years"] += 1
-                    elif months < 36:
-                        eu_durations["2-3 years"] += 1
-                    elif months < 60:
-                        eu_durations["3-5 years"] += 1
-                    else:
-                        eu_durations[">5 years"] += 1
-                except ValueError:
-                    continue
-        
+        ct_conn = get_db_connection(str(CLINICALTRIALS_DB))
+        eu_conn = get_db_connection(str(EUDRACT_DB))
+        ct_cursor = ct_conn.cursor()
+        eu_cursor = eu_conn.cursor()
+
+        ct_query = """
+            SELECT CASE
+                WHEN months < 12 THEN '<1 year'
+                WHEN months < 24 THEN '1-2 years'
+                WHEN months < 36 THEN '2-3 years'
+                WHEN months < 60 THEN '3-5 years'
+                ELSE '>5 years'
+            END as bin, COUNT(*) as count
+            FROM (
+                SELECT (strftime('%Y', completion_date) - strftime('%Y', start_date)) * 12 +
+                       (strftime('%m', completion_date) - strftime('%m', start_date)) as months
+                FROM clinical_trials
+                WHERE start_date IS NOT NULL AND completion_date IS NOT NULL
+            )
+            WHERE 1=1
+        """
+        eu_query = """
+            SELECT CASE
+                WHEN months < 12 THEN '<1 year'
+                WHEN months < 24 THEN '1-2 years'
+                WHEN months < 36 THEN '2-3 years'
+                WHEN months < 60 THEN '3-5 years'
+                ELSE '>5 years'
+            END as bin, COUNT(*) as count
+            FROM (
+                SELECT (strftime('%Y', end_date) - strftime('%Y', start_date)) * 12 +
+                       (strftime('%m', end_date) - strftime('%m', start_date)) as months
+                FROM eudract_trials
+                WHERE start_date IS NOT NULL AND end_date IS NOT NULL
+            )
+            WHERE 1=1
+        """
+        params_ct = []
+        params_eu = []
+        if start_date:
+            ct_query += " AND start_date >= ?"
+            eu_query += " AND start_date >= ?"
+            params_ct.append(start_date)
+            params_eu.append(start_date)
+        if end_date:
+            ct_query += " AND completion_date <= ?"
+            eu_query += " AND end_date <= ?"
+            params_ct.append(end_date)
+            params_eu.append(end_date)
+        if conditions:
+            for cond in conditions:
+                ct_query += " AND conditions LIKE ?"
+                params_ct.append(f"%{cond}%")
+                eu_query += " AND condition LIKE ?"
+                params_eu.append(f"%{cond}%")
+        if region and region != "ALL":
+            if region == "US":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' = 'United States')"
+                eu_query += " AND EXISTS (SELECT 1 WHERE 0)"
+            elif region == "EU":
+                ct_query += " AND EXISTS (SELECT 1 FROM json_each(locations) WHERE value->>'country' IN ('Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden'))"
+                eu_query += " AND 1=1"
+
+        ct_query += " GROUP BY bin"
+        eu_query += " GROUP BY bin"
+
+        ct_cursor.execute(ct_query, params_ct)
+        eu_cursor.execute(eu_query, params_eu)
+        ct_durations = dict(ct_cursor.fetchall())
+        eu_durations = dict(eu_cursor.fetchall())
+
+        bins = ["<1 year", "1-2 years", "2-3 years", "3-5 years", ">5 years"]
+        ct_durations = {b: ct_durations.get(b, 0) for b in bins}
+        eu_durations = {b: eu_durations.get(b, 0) for b in bins}
+
+        ct_conn.close()
+        eu_conn.close()
+
         return {
             "clinicaltrials_durations": ct_durations,
             "eudract_durations": eu_durations
         }
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in by_duration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error aggregating by duration: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error aggregating by duration: {str(e)}")
 
+# Initialize scheduler
+scheduler = AsyncIOScheduler()
+
+@app.on_event("startup")
+async def startup_event():
+    """Run data fetches on app startup."""
+    logger.info("Starting initial data fetch on app startup")
+    fetch_clinicaltrials_data()
+    fetch_eudract_data()
+
+# Scheduler for periodic updates
+scheduler.add_job(fetch_clinicaltrials_data, 'interval', hours=24)
+scheduler.start()

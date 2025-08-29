@@ -1,72 +1,21 @@
-# Miracle - Pharmaceutical Intelligence Platform
+# Changes Attempted and Issues Faced
 
-A web application built to explore trends in US vs. EU clinical trials, featuring a React/TypeScript frontend and a FastAPI backend.
+This branch attempted to utilize the full datasets instead of the (500 subset) but is broken due to unresolved errors. 
 
-## Frontend
-The welcome page is built with **React**, **TypeScript**, and **Tailwind CSS v4**.
+## Changes Attempted
+- Migrated from JSON caches (`clinicaltrials_cache.json`, `eudract_data.json`) to SQLite databases (`clinical_trials.db`, `eudract.db`) for scalability with large datasets (~551k ClinicalTrials.gov, ~44k EudraCT trials).
+- Scaled to full datasets by removing `NUM_TRIALS=500` limit, fetching ClinicalTrials.gov until `nextPageToken` is None and EudraCT until empty pages.
+- Implemented resumability using a `metadata` table to store `last_token`, `last_page`, and `fetch_complete` for resuming after crashes.
+- Replaced `filter_data` with SQL queries in endpoints (e.g., `/aggregations/by_year`, `/by_condition`) using `json_each` for JSON fields like `conditions` and `locations`.
+- Added client-side caching with `@tanstack/react-query` in the frontend to cache API responses for 5 minutes, reducing backend load.
+- Would need to consider pagination if frontend to backend api calls took too long due to size
+- Would need to optimize `/refresh` endpoint to only fetch new trials, perhaps by timestamp, otherwise refreshing 551k+ trials takes too long
 
-### Why Tailwind CSS?
-I chose Tailwind CSS because it's highly customizable. With utility-first classes, I can easily:
-- Modify colors, spacing, and layouts
-- Create consistent design systems
-- Build responsive interfaces quickly
-- Customize the design to match any brand requirements
-
-The utility-based approach makes it simple to adjust the visual design without writing custom CSS, while maintaining a clean and maintainable codebase.
-
-## Backend
-The backend is built with **FastAPI**, **Python 3.11**, **APScheduler**, and **pandas**, handling data from ClinicalTrials.gov and EudraCT.
-
-### Data Sources
-- **ClinicalTrials.gov**: Fetched programmatically via the API (`https://clinicaltrials.gov/api/v2/studies`), limited to 500 records, cached in `data/clinicaltrials_cache.json`.
-- **EudraCT**: Programmatically fetched by spoofing the download endpoint (`https://www.clinicaltrialsregister.eu/ctr-search/rest/download/full`) using a session-based approach to mimic browser behavior and obtain cookies. Text data is parsed into JSON and cached in `data/eudract_data.json` (limited to 500 records).
-
-### Setup Instructions
-1. Ensure **Python 3.11** is installed: `python3 --version`
-2. Create and activate a virtual environment:
-   ```bash
-   cd backend
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-3. Install backend dependencies:
-   ```bash
-   python3 -m pip install --upgrade pip
-   python3 -m pip install fastapi uvicorn requests pandas python-dateutil apscheduler
-   ```
-4. Install frontend dependencies (assuming a `frontend` directory with React app):
-   ```bash
-   cd frontend
-   npm install
-   ```
-5. Run the backend server:
-   ```bash
-   cd backend
-   python3 -m uvicorn main:app --reload --port 8000
-   ```
-   - Fetches ClinicalTrials.gov and EudraCT data on startup if caches (`data/clinicaltrials_cache.json`, `data/eudract_data.json`) are missing. EudraCT fetch takes ~75s for 500 trials (25 pages, 3s delay per page).
-6. Run the frontend (e.g., with Vite):
-   ```bash
-   cd frontend
-   npm run dev
-   ```
-   - Frontend runs on `http://localhost:5173` (Vite default).
-
-### Endpoints
-- **GET /clinicaltrials**: Fetch cached ClinicalTrials.gov data (500 records).
-- **GET /eudract**: Fetch cached EudraCT data (500 records).
-- **POST /refresh**: Manually refresh ClinicalTrials.gov data.
-- **GET /aggregations/totals**: Total trials for both sources.
-- **GET /aggregations/by_condition**: Top 10 conditions.
-- **GET /aggregations/by_sponsor**: Top 10 sponsors.
-- **GET /aggregations/enrollment_by_region**: Enrollment by US, EU, Others.
-
-### Scheduling
-- **ClinicalTrials.gov**: Data is fetched on server startup and every 24 hours via APScheduler.
-- **EudraCT**: Fetched on startup if cache is missing (static file, not scheduled for refresh).
-
-### Notes
-- **EudraCT Spoofing**: Data is fetched by mimicking browser requests to `/ctr-search/rest/download/full`, parsing text into JSON with fields like `EudraCT Number`, `Name of Sponsor`, `Medical condition(s) being investigated`, `F.4.2.1 In the EEA`.
-- **Cache Files**: Ensure `data/` directory exists. Caches are stored as `clinicaltrials_cache.json` and `eudract_data.json`.
-- **Field Mapping**: EudraCT fields may vary (e.g., `F.4.2.1 In the EEA` for enrollment); verify in `eudract_data.json`.
-- **Assisted by**: Grok (xAI) for code, debugging, and API spoofing logic.
+## Issues Faced
+- **NameError: `sqlite3` not defined**: Endpoints like `/aggregations/by_duration` failed because `main.py` didn’t import `sqlite3` for exception handling. Fixed by adding `import sqlite3`.
+- **Malformed JSON in SQLite**: `/conditions`, `/by_phase`, `/by_condition` failed with `SQLite error: malformed JSON` due to invalid `conditions` and `phases` values (e.g., `json.dumps(None)`) in `clinical_trials.db`. Fixed by validating inputs as lists in `insert_clinicaltrials_studies`.
+- **No Such Column in /by_duration**: Failed with `no such column: start_date` due to incorrect SQL query structure (filters outside subquery). Fixed by moving filters into the subquery.
+- **NoneType Error in /by_year**: Failed with `'<' not supported between NoneType and str` because `strftime('%Y', start_date)` returned `None` for null dates. Fixed by filtering out `None` years before sorting.
+- **Invalid EudraCT Enrollment**: `fetch_eudract_data` failed with `invalid literal for int()` on non-numeric `F.4.2.2` values (e.g., `'110 G. Investigator Networks...'`). Fixed by validating enrollment in `insert_eudract_trials`.
+- **Connection Pool Full for EudraCT**: `fetch_eudract_data` logged `Connection pool is full` warnings due to `max_workers=20` exceeding pool size (10). Fixed by reducing to `max_workers=10` and increasing sleep to 5s.
+- **Scheduler Error**: `startup_event` failed with `TypeError: NoneType can't be used in 'await'` due to incorrect `await` on `scheduler.start()`. Fixed by making `startup_event` synchronous and initializing `scheduler` globally.
