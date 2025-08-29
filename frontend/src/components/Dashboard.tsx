@@ -15,8 +15,8 @@ import {
 import { getDashboard, updateDashboard } from '../utils/dashboardStorage';
 import type { DashboardLayout } from '../utils/dashboardStorage';
 
-// Widget information for display names
-const WIDGET_INFO = {
+// Chart information for display names
+const CHART_INFO = {
   'totals': 'Total Clinical Trials',
   'conditions-clinicaltrials': 'Conditions (ClinicalTrials.gov)',
   'conditions-eudract': 'Conditions (EudraCT)',
@@ -37,7 +37,7 @@ const Dashboard: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { fontSize } = useFontSize();
   const [layout, setLayout] = useState<DashboardLayout>({});
-  const [showAddWidgetModal, setShowAddWidgetModal] = useState(false);
+  const [showAddChartModal, setShowAddChartModal] = useState(false);
 
   const getFontSizeClasses = () => {
     if (fontSize === 'large') {
@@ -87,8 +87,8 @@ const Dashboard: React.FC = () => {
     }
   }, [id]);
 
-  // Handle widget deletion
-  const handleDeleteWidget = (chartId: string) => {
+  // Handle chart deletion
+  const handleDeleteChart = (chartId: string) => {
     if (!id) return;
 
     const newLayout = { ...layout };
@@ -97,14 +97,14 @@ const Dashboard: React.FC = () => {
     updateDashboard(id, newLayout);
   };
 
-  // Get missing widgets (widgets not in current layout)
-  const getMissingWidgets = () => {
+  // Get missing charts (charts not in current layout)
+  const getMissingCharts = () => {
     const defaultLayout = getDefaultLayout();
     return Object.keys(defaultLayout).filter(chartId => !(chartId in layout));
   };
 
-  // Handle adding a widget
-  const handleAddWidget = (chartId: string) => {
+  // Handle adding a chart
+  const handleAddChart = (chartId: string) => {
     if (!id) return;
 
     const newLayout = { ...layout };
@@ -119,16 +119,16 @@ const Dashboard: React.FC = () => {
     newLayout[chartId] = nextPosition;
     setLayout(newLayout);
     updateDashboard(id, newLayout);
-    setShowAddWidgetModal(false);
+    setShowAddChartModal(false);
   };
 
-  // Map chartIds to widget components
-  const widgetComponents: { [key: string]: React.ReactElement } = {
+  // Map chartIds to chart components
+  const chartComponents: { [key: string]: React.ReactElement } = {
     'totals': (
       <TotalsChartWidget
         key="totals"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('totals')}
+        onDelete={() => handleDeleteChart('totals')}
       />
     ),
     'conditions-clinicaltrials': (
@@ -136,7 +136,7 @@ const Dashboard: React.FC = () => {
         key="conditions-clinicaltrials"
         source="clinicaltrials"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('conditions-clinicaltrials')}
+        onDelete={() => handleDeleteChart('conditions-clinicaltrials')}
       />
     ),
     'conditions-eudract': (
@@ -144,7 +144,7 @@ const Dashboard: React.FC = () => {
         key="conditions-eudract"
         source="eudract"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('conditions-eudract')}
+        onDelete={() => handleDeleteChart('conditions-eudract')}
       />
     ),
     'sponsors-clinicaltrials': (
@@ -152,7 +152,7 @@ const Dashboard: React.FC = () => {
         key="sponsors-clinicaltrials"
         type="clinicaltrials"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('sponsors-clinicaltrials')}
+        onDelete={() => handleDeleteChart('sponsors-clinicaltrials')}
       />
     ),
     'sponsors-eudract': (
@@ -160,7 +160,7 @@ const Dashboard: React.FC = () => {
         key="sponsors-eudract"
         type="eudract"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('sponsors-eudract')}
+        onDelete={() => handleDeleteChart('sponsors-eudract')}
       />
     ),
     'sponsors-combined': (
@@ -168,7 +168,7 @@ const Dashboard: React.FC = () => {
         key="sponsors-combined"
         type="combined"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('sponsors-combined')}
+        onDelete={() => handleDeleteChart('sponsors-combined')}
       />
     ),
     'enrollment-clinicaltrials': (
@@ -176,7 +176,7 @@ const Dashboard: React.FC = () => {
         key="enrollment-clinicaltrials"
         source="clinicaltrials"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('enrollment-clinicaltrials')}
+        onDelete={() => handleDeleteChart('enrollment-clinicaltrials')}
       />
     ),
     'enrollment-eudract': (
@@ -184,7 +184,7 @@ const Dashboard: React.FC = () => {
         key="enrollment-eudract"
         source="eudract"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('enrollment-eudract')}
+        onDelete={() => handleDeleteChart('enrollment-eudract')}
       />
     ),
     'status-clinicaltrials': (
@@ -192,7 +192,7 @@ const Dashboard: React.FC = () => {
         key="status-clinicaltrials"
         source="clinicaltrials"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('status-clinicaltrials')}
+        onDelete={() => handleDeleteChart('status-clinicaltrials')}
       />
     ),
     'status-eudract': (
@@ -200,44 +200,44 @@ const Dashboard: React.FC = () => {
         key="status-eudract"
         source="eudract"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('status-eudract')}
+        onDelete={() => handleDeleteChart('status-eudract')}
       />
     ),
     'phases': (
       <PhasesChartWidget
         key="phases"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('phases')}
+        onDelete={() => handleDeleteChart('phases')}
       />
     ),
     'years': (
       <YearsChartWidget
         key="years"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('years')}
+        onDelete={() => handleDeleteChart('years')}
       />
     ),
     'countries': (
       <CountriesChartWidget
         key="countries"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('countries')}
+        onDelete={() => handleDeleteChart('countries')}
       />
     ),
     'durations': (
       <DurationsChartWidget
         key="durations"
         showDeleteButton={true}
-        onDelete={() => handleDeleteWidget('durations')}
+        onDelete={() => handleDeleteChart('durations')}
       />
     ),
   };
 
-  // Sort widgets by position
-  const sortedWidgets = Object.entries(layout)
+  // Sort charts by position
+  const sortedCharts = Object.entries(layout)
     .sort(([, posA], [, posB]) => posA - posB)
-    .map(([chartId]) => widgetComponents[chartId])
-    .filter(Boolean); // Remove undefined widgets
+    .map(([chartId]) => chartComponents[chartId])
+    .filter(Boolean); // Remove undefined charts
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 py-12 px-6">
@@ -249,11 +249,11 @@ const Dashboard: React.FC = () => {
           Dashboard ID: {id}
         </p>
 
-        {/* Add Widget Button */}
-        {getMissingWidgets().length > 0 && (
+        {/* Add Chart Button */}
+        {getMissingCharts().length > 0 && (
           <div className="flex justify-center mb-8">
             <button
-              onClick={() => setShowAddWidgetModal(true)}
+              onClick={() => setShowAddChartModal(true)}
               className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -265,14 +265,14 @@ const Dashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Add Widget Modal */}
-        {showAddWidgetModal && (
+        {/* Add Chart Modal */}
+        {showAddChartModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-6 max-w-md w-full max-h-[80vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-semibold text-gray-900">Add Widget</h3>
+                <h3 className="text-xl font-semibold text-gray-900">Add Chart</h3>
                 <button
-                  onClick={() => setShowAddWidgetModal(false)}
+                  onClick={() => setShowAddChartModal(false)}
                   className="p-1 hover:bg-gray-100 rounded-full"
                 >
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -282,16 +282,16 @@ const Dashboard: React.FC = () => {
                 </button>
               </div>
 
-              <p className="text-gray-600 mb-4">Select a widget to add to your dashboard:</p>
+              <p className="text-gray-600 mb-4">Select a chart to add to your dashboard:</p>
 
               <div className="space-y-2">
-                {getMissingWidgets().map((chartId) => (
+                {getMissingCharts().map((chartId) => (
                   <button
                     key={chartId}
-                    onClick={() => handleAddWidget(chartId)}
+                    onClick={() => handleAddChart(chartId)}
                     className="w-full text-left p-3 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors duration-200"
                   >
-                    <span className="font-medium text-gray-900">{WIDGET_INFO[chartId as keyof typeof WIDGET_INFO]}</span>
+                    <span className="font-medium text-gray-900">{CHART_INFO[chartId as keyof typeof CHART_INFO]}</span>
                   </button>
                 ))}
               </div>
@@ -300,11 +300,11 @@ const Dashboard: React.FC = () => {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {sortedWidgets.length > 0 ? (
-            sortedWidgets
+          {sortedCharts.length > 0 ? (
+            sortedCharts
           ) : (
             <p className="text-gray-600 text-center col-span-full">
-              No widgets in this dashboard. Click "Add Widget" to start customizing.
+              No charts in this dashboard. Click "Add Chart" to start customizing.
             </p>
           )}
         </div>
