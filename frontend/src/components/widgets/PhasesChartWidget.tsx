@@ -23,8 +23,7 @@ const PhasesChartWidget: React.FC<PhasesChartWidgetProps> = ({
       title="Trials by Phase (ClinicalTrials.gov vs EudraCT)"
       chartConfig={{
         type: 'bar',
-        width: 350,
-        height: 250,
+        height: 350,
         dataKeys: ['clinicaltrials', 'eudract'],
         showLegend: true
       }}

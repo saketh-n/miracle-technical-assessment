@@ -28,10 +28,9 @@ const ConditionsChartWidget: React.FC<ConditionsChartWidgetProps> = ({
       title={`Trials by Condition [Top 10] (${sourceName})`}
       chartConfig={{
         type: 'pie',
-        width: 350,
-        height: 250,
+        height: 320,
         dataKeys: ['value'],
-        showLegend: true
+        showLegend: false
       }}
       transformData={(data) => {
         const conditions = source === 'clinicaltrials'

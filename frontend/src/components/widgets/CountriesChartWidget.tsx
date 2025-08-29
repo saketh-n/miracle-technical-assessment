@@ -22,10 +22,8 @@ const CountriesChartWidget: React.FC<CountriesChartWidgetProps> = ({
       title="Trials by Country [Top 10] (ClinicalTrials.gov)"
       chartConfig={{
         type: 'bar',
-        width: 350,
-        height: 250,
+        height: 350,
         dataKeys: ['value'],
-        layout: 'vertical',
         showLegend: true
       }}
       transformData={(data) =>

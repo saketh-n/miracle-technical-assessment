@@ -23,8 +23,7 @@ const DurationsChartWidget: React.FC<DurationsChartWidgetProps> = ({
       title="Trial Duration Distribution (ClinicalTrials.gov vs EudraCT)"
       chartConfig={{
         type: 'bar',
-        width: 350,
-        height: 250,
+        height: 350,
         dataKeys: ['clinicaltrials', 'eudract'],
         showLegend: true
       }}

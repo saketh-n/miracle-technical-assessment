@@ -24,8 +24,7 @@ const TotalsChartWidget: React.FC<TotalsChartWidgetProps> = ({
       title="Total Clinical Trials (ClinicalTrials.gov vs EudraCT)"
       chartConfig={{
         type: 'bar',
-        width: 350,
-        height: 250,
+        height: 350,
         dataKeys: ['value'],
         showLegend: true
       }}

@@ -1,9 +1,24 @@
-import React, { useEffect, useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
+import { useEffect, useState } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line, ResponsiveContainer } from 'recharts';
 import { useFontSize } from '../../context/FontSizeContext';
 import type { FilterState } from '../FiltersPanel';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#a4de6c', '#d0ed57'];
+
+// Utility function to truncate text
+const truncateText = (text: string, maxLength: number = 20): string => {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + '...';
+};
+
+// Custom label renderer for pie charts that handles overflow
+const renderCustomPieLabel = (entry: any) => {
+  const { name, percent } = entry;
+  if (percent < 0.05) return null; // Hide labels for very small slices
+  return `${truncateText(name, 15)} (${(percent * 100).toFixed(0)}%)`;
+};
+
+
 
 export type ChartType = 'bar' | 'pie' | 'line';
 export type BarLayout = 'horizontal' | 'vertical';
@@ -117,17 +132,69 @@ function BaseChartWidget<T extends Record<string, any>>({
   const chartData = data ? transformData(data) : [];
 
   const renderChart = () => {
-    const { type, width = 350, height = 250, dataKeys = ['value'], layout = 'horizontal', showLegend = true } = chartConfig;
+    const { type, height = 300, dataKeys = ['value'], layout = 'horizontal', showLegend = true } = chartConfig;
+
+    // Transform chart data to truncate long names for better display
+    const processedChartData = chartData.map(item => ({
+      ...item,
+      displayName: item.name ? truncateText(item.name, 20) : item.name,
+      originalName: item.name // Keep original for tooltips
+    }));
 
     switch (type) {
       case 'bar':
         if (layout === 'vertical') {
           return (
-            <BarChart width={width} height={height} data={chartData} layout="vertical">
+            <ResponsiveContainer width="100%" height={height}>
+              <BarChart data={processedChartData} layout="vertical" margin={{ top: 10, right: 20, left: 80, bottom: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis type="number" />
+                <YAxis 
+                  dataKey="displayName" 
+                  type="category" 
+                  width={120}
+                  tick={{ fontSize: 12 }}
+                />
+                <Tooltip 
+                  formatter={(value, name) => [value, name === 'value' ? 'Count' : name]}
+                  labelFormatter={(label) => {
+                    const item = processedChartData.find(d => d.displayName === label);
+                    return item?.originalName || label;
+                  }}
+                />
+                {showLegend && <Legend />}
+                {dataKeys.map((key, index) => (
+                  <Bar
+                    key={key}
+                    dataKey={key}
+                    fill={COLORS[index % COLORS.length]}
+                    name={key === 'value' ? 'Count' : key}
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          );
+        }
+        return (
+          <ResponsiveContainer width="100%" height={height}>
+            <BarChart data={processedChartData} margin={{ top: 10, right: 20, left: 20, bottom: 60 }}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" />
-              <YAxis dataKey="name" type="category" width={100} />
-              <Tooltip />
+              <XAxis 
+                dataKey="displayName" 
+                angle={-45} 
+                textAnchor="end" 
+                height={60}
+                tick={{ fontSize: 12 }}
+                interval={0}
+              />
+              <YAxis />
+              <Tooltip 
+                formatter={(value, name) => [value, name === 'value' ? 'Count' : name]}
+                labelFormatter={(label) => {
+                  const item = processedChartData.find(d => d.displayName === label);
+                  return item?.originalName || label;
+                }}
+              />
               {showLegend && <Legend />}
               {dataKeys.map((key, index) => (
                 <Bar
@@ -138,65 +205,67 @@ function BaseChartWidget<T extends Record<string, any>>({
                 />
               ))}
             </BarChart>
-          );
-        }
-        return (
-          <BarChart width={width} height={height} data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="name" angle={-45} textAnchor="end" height={60} />
-            <YAxis />
-            <Tooltip />
-            {showLegend && <Legend />}
-            {dataKeys.map((key, index) => (
-              <Bar
-                key={key}
-                dataKey={key}
-                fill={COLORS[index % COLORS.length]}
-                name={key === 'value' ? 'Count' : key}
-              />
-            ))}
-          </BarChart>
+          </ResponsiveContainer>
         );
 
       case 'pie':
         return (
-          <PieChart width={width} height={height}>
-            <Pie
-              data={chartData}
-              cx="50%"
-              cy="50%"
-              outerRadius={100}
-              fill="#8884d8"
-              dataKey={dataKeys[0] || 'value'}
-              label
-            >
-              {chartData.map((_, index) => (
-                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-              ))}
-            </Pie>
-            <Tooltip />
-            {showLegend && <Legend />}
-          </PieChart>
+          <ResponsiveContainer width="100%" height={height}>
+            <PieChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+              <Pie
+                data={processedChartData}
+                cx="50%"
+                cy="50%"
+                outerRadius="70%"
+                fill="#8884d8"
+                dataKey={dataKeys[0] || 'value'}
+                label={renderCustomPieLabel}
+                labelLine={false}
+              >
+                {processedChartData.map((_, index) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip 
+                formatter={(value, _name) => [value, 'Count']}
+                labelFormatter={(label) => {
+                  const item = processedChartData.find(d => d.displayName === label);
+                  const fullName = item?.originalName || label;
+                  return fullName;
+                }}
+              />
+              {showLegend && (
+                <Legend 
+                  formatter={(value) => {
+                    const item = processedChartData.find(d => d.displayName === value);
+                    return truncateText(item?.originalName || value, 25);
+                  }}
+                />
+              )}
+            </PieChart>
+          </ResponsiveContainer>
         );
 
       case 'line':
         return (
-          <LineChart width={width} height={height} data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="year" />
-            <YAxis />
-            <Tooltip />
-            {showLegend && <Legend />}
-            {dataKeys.map((key, index) => (
-              <Line
-                key={key}
-                type="monotone"
-                dataKey={key}
-                stroke={COLORS[index % COLORS.length]}
-                name={key}
-              />
-            ))}
-          </LineChart>
+          <ResponsiveContainer width="100%" height={height}>
+            <LineChart data={processedChartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="year" tick={{ fontSize: 12 }} />
+              <YAxis />
+              <Tooltip />
+              {showLegend && <Legend />}
+              {dataKeys.map((key, index) => (
+                <Line
+                  key={key}
+                  type="monotone"
+                  dataKey={key}
+                  stroke={COLORS[index % COLORS.length]}
+                  name={key}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
         );
 
       default:
@@ -205,7 +274,7 @@ function BaseChartWidget<T extends Record<string, any>>({
   };
 
   return (
-    <div className={`bg-white/80 backdrop-blur-md rounded-2xl p-6 border border-white/50 shadow-lg hover:shadow-xl transition-all duration-200 ${className} relative`}>
+    <div className={`bg-white/80 backdrop-blur-md rounded-2xl p-6 border border-white/50 shadow-lg hover:shadow-xl transition-all duration-200 ${className} relative overflow-hidden`}>
       <div className="flex justify-between items-start mb-4">
         <h2 className={`${titleClass} font-semibold text-gray-800 flex-1`}>
           {title}
@@ -233,15 +302,18 @@ function BaseChartWidget<T extends Record<string, any>>({
         )}
       </div>
       {error ? (
-        <div className={`text-center text-red-600 ${contentClass}`}>
-          Error: {error}
+        <div className={`text-center text-red-600 ${contentClass} h-64 flex items-center justify-center`}>
+          <div>
+            <p className="font-medium">Error loading chart</p>
+            <p className="text-sm mt-1">{error}</p>
+          </div>
         </div>
       ) : isLoading ? (
-        <div className={`text-center text-gray-500 ${contentClass}`}>
-          Loading...
+        <div className={`text-center text-gray-500 ${contentClass} h-64 flex items-center justify-center`}>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
         </div>
       ) : (
-        <div className={contentClass}>
+        <div className="w-full" style={{ minHeight: '280px' }}>
           {renderChart()}
         </div>
       )}

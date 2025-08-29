@@ -39,8 +39,7 @@ const SponsorsChartWidget: React.FC<SponsorsChartWidgetProps> = ({
       title={getTitle()}
       chartConfig={{
         type: 'bar',
-        width: 350,
-        height: 250,
+        height: 350,
         dataKeys: ['value'],
         showLegend: true
       }}

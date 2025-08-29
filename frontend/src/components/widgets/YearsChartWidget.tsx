@@ -23,8 +23,7 @@ const YearsChartWidget: React.FC<YearsChartWidgetProps> = ({
       title="Enrollment Trends Over Time"
       chartConfig={{
         type: 'line',
-        width: 350,
-        height: 250,
+        height: 300,
         dataKeys: ['clinicaltrials', 'eudract'],
         showLegend: true
       }}
