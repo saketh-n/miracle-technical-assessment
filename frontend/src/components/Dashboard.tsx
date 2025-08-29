@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { useFontSize } from '../context/FontSizeContext';
+import FiltersPanel from './FiltersPanel';
+import type { FilterState } from './FiltersPanel';
+import { loadFilters, saveFilters } from '../utils/filtersStorage';
 import {
   DndContext,
   closestCenter,
@@ -100,6 +103,12 @@ const Dashboard: React.FC = () => {
   const { fontSize } = useFontSize();
   const [layout, setLayout] = useState<DashboardLayout>({});
   const [showAddChartModal, setShowAddChartModal] = useState(false);
+  const [filters, setFilters] = useState<FilterState>({
+    region: 'ALL',
+    condition: '',
+    startDate: null,
+    endDate: null,
+  });
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -154,8 +163,18 @@ const Dashboard: React.FC = () => {
       } else {
         setLayout(dashboardLayout);
       }
+
+      // Load filters
+      const savedFilters = loadFilters(id);
+      setFilters(savedFilters);
     }
   }, [id]);
+
+  const handleFiltersChange = (newFilters: FilterState) => {
+    if (!id) return;
+    setFilters(newFilters);
+    saveFilters(id, newFilters);
+  };
 
   // Handle chart deletion
   const handleDeleteChart = (chartId: string) => {
@@ -351,9 +370,17 @@ const Dashboard: React.FC = () => {
         <h1 className={`${title} font-bold text-gray-900 mb-6 text-center`}>
           Custom Dashboard
         </h1>
-        <p className={`${subtitle} text-gray-600 mb-12 text-center`}>
+        <p className={`${subtitle} text-gray-600 mb-6 text-center`}>
           Dashboard ID: {id}
         </p>
+
+        {/* Filters Panel */}
+        <div className="mb-8">
+          <FiltersPanel
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+          />
+        </div>
 
         {/* Add Chart Button */}
         {getMissingCharts().length > 0 && (
