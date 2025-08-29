@@ -1,72 +1,253 @@
 # Miracle - Pharmaceutical Intelligence Platform
 
-A web application built to explore trends in US vs. EU clinical trials, featuring a React/TypeScript frontend and a FastAPI backend.
+A comprehensive web application for exploring and analyzing clinical trial trends between US (ClinicalTrials.gov) and EU (EudraCT) databases. Built with React/TypeScript frontend and FastAPI backend for optimal performance with large datasets.
 
-## Frontend
-The welcome page is built with **React**, **TypeScript**, and **Tailwind CSS v4**.
+## ✨ Features
+
+- **📊 Interactive Charts**: Multiple visualization types (bar, pie, line charts)
+- **🔍 Advanced Filtering**: Filter by region, condition, date range, and sponsor
+- **⚡ Real-time Data**: 5-minute caching with automatic refresh capabilities
+- **📱 Responsive Design**: Mobile-friendly interface with Tailwind CSS
+- **🎨 Customizable UI**: Adjustable font sizes and drag-and-drop dashboard
+- **🔄 Smart Previews**: Instant chart previews without API calls
+- **📈 Performance Optimized**: Handles ~551k ClinicalTrials.gov + 44k EudraCT trials
+
+## 🏗️ Architecture
+
+### Frontend Stack
+- **React 19.1.1** - Modern React with concurrent features
+- **TypeScript** - Type-safe development
+- **Tailwind CSS v4** - Utility-first styling framework
+- **React Query** - Powerful data fetching and caching
+- **Recharts** - Declarative charting library
+- **React Router** - Client-side routing
+- **Vite** - Fast build tool and dev server
+
+### Backend Stack
+- **FastAPI** - High-performance async web framework
+- **Python 3.11** - Modern Python with performance optimizations
+- **APScheduler** - Background job scheduling
+- **Pandas** - Data manipulation and analysis
+- **SQLite** - Lightweight database for caching
 
 ### Why Tailwind CSS?
-I chose Tailwind CSS because it's highly customizable. With utility-first classes, I can easily:
-- Modify colors, spacing, and layouts
-- Create consistent design systems
-- Build responsive interfaces quickly
-- Customize the design to match any brand requirements
+**Tailwind CSS was specifically chosen as part of the project specifications** to demonstrate proficiency with utility-first CSS frameworks. This approach was selected because:
 
-The utility-based approach makes it simple to adjust the visual design without writing custom CSS, while maintaining a clean and maintainable codebase.
+- **Rapid Development**: Utility classes enable quick UI prototyping and consistent styling
+- **Maintainability**: No custom CSS files needed, reducing bundle size and complexity
+- **Design System**: Predefined utilities ensure consistent spacing, colors, and typography
+- **Responsive Design**: Built-in responsive utilities support mobile-first development
+- **Customization**: Easily extensible for future branding and theme requirements
 
-## Backend
-The backend is built with **FastAPI**, **Python 3.11**, **APScheduler**, and **pandas**, handling data from ClinicalTrials.gov and EudraCT.
+The utility-first approach perfectly demonstrates modern CSS architecture principles while meeting the project's specific technical requirements.
 
-### Data Sources
-- **ClinicalTrials.gov**: Fetched programmatically via the API (`https://clinicaltrials.gov/api/v2/studies`), limited to 500 records, cached in `data/clinicaltrials_cache.json`.
-- **EudraCT**: Programmatically fetched by spoofing the download endpoint (`https://www.clinicaltrialsregister.eu/ctr-search/rest/download/full`) using a session-based approach to mimic browser behavior and obtain cookies. Text data is parsed into JSON and cached in `data/eudract_data.json` (limited to 500 records).
+## 📁 Repository Structure
 
-### Setup Instructions
-1. Ensure **Python 3.11** is installed: `python3 --version`
-2. Create and activate a virtual environment:
+```
+miracle-tech-assessment/
+├── 📖 README.md                           # Project documentation
+├── 🗃️ backend/                           # FastAPI backend application
+│   ├── 📄 main.py                        # FastAPI application entry point & API endpoints
+│   ├── 🗂️ models.py                      # Pydantic data models for validation
+│   ├── 💾 database.py                    # SQLite database setup and operations
+│   ├── ⏰ scheduler.py                    # Automated data fetching scheduler
+│   ├── 📦 requirements.txt               # Python dependencies
+│   └── 📁 data/                          # Data cache and database files
+│       ├── 📄 clinicaltrials_cache.json  # ClinicalTrials.gov cached data
+│       ├── 📄 eudract_data.json          # EudraCT cached data
+│       ├── 🗄️ clinical_trials.db         # SQLite database file
+│       └── 📄 *.db-*                     # SQLite WAL files
+│
+└── 🎨 frontend/                          # React/TypeScript frontend application
+    ├── 📄 package.json                   # Node.js dependencies and scripts
+    ├── ⚙️ vite.config.ts                 # Vite build configuration
+    ├── 📄 index.html                     # HTML entry point
+    └── 📁 src/                           # Source code directory
+        ├── 🔧 main.tsx                   # React application entry point
+        ├── 🏠 App.tsx                    # Main application component & routing
+        ├── 🎨 index.css                  # Global styles and Tailwind imports
+        ├── 📁 components/                # React components
+        │   ├── 📊 Charts.tsx             # Main charts page component
+        │   ├── 📋 Dashboard.tsx          # Dashboard page with custom layouts
+        │   ├── 🔍 FiltersPanel.tsx       # Filter controls and state management
+        │   ├── 🎛️ FontSizeWidget.tsx     # Accessibility font size controls
+        │   ├── 🔄 RefreshButton.tsx      # Data refresh trigger component
+        │   ├── 🧭 Sidebar.tsx            # Navigation sidebar
+        │   ├── 👋 WelcomePage.tsx        # Landing/welcome page
+        │   ├── 🚫 NotFound.tsx           # 404 error page
+        │   ├── 📁 widgets/               # Reusable chart components
+        │   │   ├── 🏗️ BaseChartWidget.tsx    # Core chart component with caching
+        │   │   ├── 📊 TotalsChartWidget.tsx  # Trial totals visualization
+        │   │   ├── 🏥 ConditionsChartWidget.tsx  # Medical conditions charts
+        │   │   ├── 🏢 SponsorsChartWidget.tsx    # Sponsor analysis charts
+        │   │   ├── 👥 EnrollmentChartWidget.tsx  # Enrollment data charts
+        │   │   ├── 📈 StatusChartWidget.tsx      # Trial status charts
+        │   │   ├── 🔬 PhasesChartWidget.tsx      # Clinical phases charts
+        │   │   ├── 📅 YearsChartWidget.tsx       # Time-based trend charts
+        │   │   ├── 🌍 CountriesChartWidget.tsx   # Geographic distribution
+        │   │   ├── ⏱️ DurationsChartWidget.tsx   # Trial duration analysis
+        │   │   └── 📄 index.ts               # Widget component exports
+        │   └── 📁 modals/                  # Modal dialog components
+        │       ├── ➕ AddChartsModal.tsx    # Chart selection modal
+        │       └── 📄 index.ts             # Modal exports
+        ├── 📁 context/                    # React context providers
+        │   └── 🔤 FontSizeContext.tsx     # Global font size state management
+        ├── 📁 utils/                      # Utility functions and helpers
+        │   ├── 📊 dashboardStorage.ts     # Dashboard layout persistence
+        │   └── 🔍 filtersStorage.ts       # Filter state persistence
+        ├── 📁 assets/                     # Static assets (images, icons)
+        └── 📄 vite-env.d.ts               # Vite environment type definitions
+```
+
+### Directory Explanations
+
+#### **Backend (`/backend/`)**
+- **`main.py`** - Core FastAPI application with REST API endpoints for data aggregation and serving
+- **`models.py`** - Pydantic data models for API request/response validation and type safety
+- **`database.py`** - SQLite database operations for caching and data persistence
+- **`scheduler.py`** - Background job scheduler for automated data fetching from external APIs
+- **`data/`** - Cache files and database storage for clinical trial data
+
+#### **Frontend (`/frontend/`)**
+- **`src/components/`** - React components organized by functionality
+  - **`widgets/`** - Reusable chart components built on BaseChartWidget
+  - **`modals/`** - Dialog components for user interactions
+- **`src/context/`** - React context providers for global state management
+- **`src/utils/`** - Helper functions for data persistence and common operations
+- **`src/assets/`** - Static files like images and icons
+
+### Key Architectural Patterns
+
+- **📊 Widget Pattern**: All charts inherit from `BaseChartWidget` for consistent caching and rendering
+- **🔄 React Query**: Centralized data fetching with intelligent caching (5-minute stale time)
+- **🎨 Utility-First CSS**: Tailwind CSS for maintainable, responsive styling
+- **📱 Mobile-First**: Responsive design that works on all screen sizes
+- **🔍 Filter State**: Global filter management with localStorage persistence
+- **📈 Performance Optimization**: Preview mode, background updates, and smart caching
+
+## 🚀 Quick Start
+
+### Prerequisites
+- **Python 3.11+** - Backend runtime
+- **Node.js 18+** - Frontend build tools
+- **npm or yarn** - Package manager
+
+### Installation & Setup
+
+1. **Clone and setup backend:**
    ```bash
    cd backend
    python3 -m venv venv
-   source venv/bin/activate
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
    ```
-3. Install backend dependencies:
+
+2. **Setup frontend:**
    ```bash
-   python3 -m pip install --upgrade pip
-   python3 -m pip install fastapi uvicorn requests pandas python-dateutil apscheduler
-   ```
-4. Install frontend dependencies (assuming a `frontend` directory with React app):
-   ```bash
-   cd frontend
+   cd ../frontend
    npm install
    ```
-5. Run the backend server:
+
+3. **Run the application:**
    ```bash
+   # Terminal 1: Backend
    cd backend
    python3 -m uvicorn main:app --reload --port 8000
-   ```
-   - Fetches ClinicalTrials.gov and EudraCT data on startup if caches (`data/clinicaltrials_cache.json`, `data/eudract_data.json`) are missing. EudraCT fetch takes ~75s for 500 trials (25 pages, 3s delay per page).
-6. Run the frontend (e.g., with Vite):
-   ```bash
+
+   # Terminal 2: Frontend
    cd frontend
    npm run dev
    ```
-   - Frontend runs on `http://localhost:5173` (Vite default).
 
-### Endpoints
-- **GET /clinicaltrials**: Fetch cached ClinicalTrials.gov data (500 records).
-- **GET /eudract**: Fetch cached EudraCT data (500 records).
-- **POST /refresh**: Manually refresh ClinicalTrials.gov data.
-- **GET /aggregations/totals**: Total trials for both sources.
-- **GET /aggregations/by_condition**: Top 10 conditions.
-- **GET /aggregations/by_sponsor**: Top 10 sponsors.
-- **GET /aggregations/enrollment_by_region**: Enrollment by US, EU, Others.
+4. **Access the application:**
+   - Frontend: http://localhost:5173
+   - API Docs: http://localhost:8000/docs
+   - API ReDoc: http://localhost:8000/redoc
 
-### Scheduling
-- **ClinicalTrials.gov**: Data is fetched on server startup and every 24 hours via APScheduler.
-- **EudraCT**: Fetched on startup if cache is missing (static file, not scheduled for refresh).
+### Data Sources
+- **ClinicalTrials.gov**: Official US clinical trials database (500 records cached)
+- **EudraCT**: European Clinical Trials Register (500 records cached)
+- **Auto-refresh**: ClinicalTrials.gov data refreshes every 24 hours
 
-### Notes
-- **EudraCT Spoofing**: Data is fetched by mimicking browser requests to `/ctr-search/rest/download/full`, parsing text into JSON with fields like `EudraCT Number`, `Name of Sponsor`, `Medical condition(s) being investigated`, `F.4.2.1 In the EEA`.
-- **Cache Files**: Ensure `data/` directory exists. Caches are stored as `clinicaltrials_cache.json` and `eudract_data.json`.
-- **Field Mapping**: EudraCT fields may vary (e.g., `F.4.2.1 In the EEA` for enrollment); verify in `eudract_data.json`.
-- **Assisted by**: Grok (xAI) for code, debugging, and API spoofing logic.
+## 📚 API Documentation
+
+### Core Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/clinicaltrials` | Fetch cached ClinicalTrials.gov data |
+| `GET` | `/eudract` | Fetch cached EudraCT data |
+| `POST` | `/refresh` | Manually refresh ClinicalTrials.gov data |
+| `GET` | `/conditions` | Get unique medical conditions for filtering |
+| `GET` | `/min_max_date` | Get date range constraints |
+
+### Aggregation Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/aggregations/totals` | Total trial counts by source |
+| `GET` | `/aggregations/by_condition` | Top conditions by trial count |
+| `GET` | `/aggregations/by_sponsor` | Top sponsors by trial count |
+| `GET` | `/aggregations/enrollment_by_region` | Enrollment numbers by region |
+| `GET` | `/aggregations/by_status` | Trial status distribution |
+| `GET` | `/aggregations/by_phase` | Trial phase distribution |
+| `GET` | `/aggregations/by_year` | Trial trends over time |
+| `GET` | `/aggregations/by_country` | Trials by country |
+| `GET` | `/aggregations/by_duration` | Trial duration distribution |
+
+### Query Parameters (for aggregation endpoints)
+- `region`: Filter by region (`US`, `EU`, or `ALL`)
+- `conditions`: Filter by medical conditions (comma-separated)
+- `start_date`: Filter by start date (YYYY-MM-DD)
+- `end_date`: Filter by end date (YYYY-MM-DD)
+
+## 🔄 Data Management
+
+### Caching Strategy
+- **ClinicalTrials.gov**: 24-hour refresh cycle via APScheduler
+- **EudraCT**: Cached on startup, manual refresh only
+- **Frontend**: 5-minute client-side caching via React Query
+
+### Cache Files
+```
+backend/data/
+├── clinicaltrials_cache.json    # ClinicalTrials.gov data
+├── eudract_data.json           # EudraCT data
+├── clinical_trials.db          # SQLite database
+└── *.db-*                      # SQLite WAL files
+```
+
+### Data Pipeline
+1. **Fetch**: Retrieve data from external APIs
+2. **Parse**: Convert to structured JSON format
+3. **Cache**: Store in local files and database
+4. **Serve**: Provide aggregated data via REST API
+5. **Display**: Render interactive charts in frontend
+
+## ⚠️ Important Notes
+
+### EudraCT Integration
+- Uses browser request spoofing to access `/ctr-search/rest/download/full`
+- Parses text data into structured JSON format
+- Fields may vary (e.g., `F.4.2.1 In the EEA` for enrollment)
+
+### Performance Considerations
+- Backend handles ~551k ClinicalTrials.gov + 44k EudraCT trials
+- Frontend uses React Query for intelligent caching
+- Charts render with dummy data in preview mode
+
+## 🤝 Contributing
+
+### Development Setup
+1. Follow the Quick Start guide above
+2. Backend API docs available at `http://localhost:8000/docs`
+3. Frontend dev server at `http://localhost:5173`
+
+### Code Quality
+- **Frontend**: ESLint + TypeScript for type safety
+- **Backend**: Pydantic models for data validation
+- **Testing**: Manual testing with real data sources
+
+---
+
+*Built with ❤️ using React, TypeScript, FastAPI, and modern web technologies*

@@ -1,18 +1,42 @@
 
+/**
+ * Base Chart Widget Component
+ *
+ * A reusable, configurable chart component that handles data fetching, caching,
+ * and rendering for various chart types (bar, pie, line). Supports both real
+ * data fetching and preview mode with dummy data.
+ *
+ * Features:
+ * - React Query integration for intelligent caching
+ * - Preview mode with realistic dummy data (no API calls)
+ * - Responsive design with Recharts library
+ * - Accessibility support with font size controls
+ * - Error handling and loading states
+ */
+
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line, ResponsiveContainer } from 'recharts';
 import { useFontSize } from '../../context/FontSizeContext';
 import type { FilterState } from '../FiltersPanel';
 
+/** Color palette for chart elements */
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#a4de6c', '#d0ed57'];
 
-// Utility function to truncate text
+/**
+ * Truncate text to prevent overflow in chart labels
+ * @param text - Text to truncate
+ * @param maxLength - Maximum length before truncation
+ * @returns Truncated text with ellipsis if needed
+ */
 const truncateText = (text: string, maxLength: number = 20): string => {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength) + '...';
 };
 
-// Custom label renderer for pie charts that handles overflow
+/**
+ * Custom label renderer for pie chart slices
+ * Only shows labels for slices > 5% to avoid overcrowding
+ */
 const renderCustomPieLabel = (entry: any) => {
   const { name, percent } = entry;
   if (percent < 0.05) return null; // Hide labels for very small slices
@@ -49,10 +73,18 @@ export interface DeleteProps {
   onDelete?: () => void;
 }
 
-// Generate realistic dummy data for preview mode
+/**
+ * Generate realistic dummy data for chart previews
+ *
+ * Creates contextually appropriate dummy data based on chart type and configuration.
+ * This allows users to see what charts will look like without making API calls.
+ *
+ * @param config - Chart configuration object
+ * @returns Array of data objects appropriate for the chart type
+ */
 const generateDummyData = (config: ChartConfig) => {
   const { type, dataKeys = ['value'] } = config;
-  
+
   switch (type) {
     case 'bar':
       if (dataKeys.length > 1) {
@@ -77,10 +109,10 @@ const generateDummyData = (config: ChartConfig) => {
           { name: 'Netherlands', value: 312 }
         ];
       }
-      
+
     case 'pie':
       if (dataKeys.length > 1) {
-        // Multi-series pie chart (unlikely, but handle gracefully)
+        // Multi-series pie chart (fallback case)
         return [
           { name: 'Category A', value: 45 },
           { name: 'Category B', value: 32 },
@@ -98,9 +130,9 @@ const generateDummyData = (config: ChartConfig) => {
           { name: 'Other', value: 67 }
         ];
       }
-      
+
     case 'line':
-      // Line chart (e.g., years)
+      // Line chart (e.g., years) - shows growth trend over time
       return [
         { year: '2019', clinicaltrials: 45, eudract: 32 },
         { year: '2020', clinicaltrials: 52, eudract: 38 },
@@ -109,7 +141,7 @@ const generateDummyData = (config: ChartConfig) => {
         { year: '2023', clinicaltrials: 89, eudract: 67 },
         { year: '2024', clinicaltrials: 95, eudract: 72 }
       ];
-      
+
     default:
       return [
         { name: 'Sample Data 1', value: 100 },
@@ -119,7 +151,16 @@ const generateDummyData = (config: ChartConfig) => {
   }
 };
 
-// Render chart with provided data (used for both real and dummy data)
+/**
+ * Render a chart component with provided data and configuration
+ *
+ * This function creates the appropriate chart type (bar, pie, or line) using Recharts
+ * and handles data truncation and responsive design.
+ *
+ * @param chartData - Array of data objects to display
+ * @param chartConfig - Chart configuration object
+ * @returns React element representing the chart
+ */
 const renderChartWithData = (chartData: any[], chartConfig: ChartConfig) => {
   const { type, height = 300, dataKeys = ['value'], layout = 'horizontal', showLegend = true } = chartConfig;
 
@@ -262,6 +303,22 @@ const renderChartWithData = (chartData: any[], chartConfig: ChartConfig) => {
   }
 };
 
+/**
+ * Base Chart Widget Component
+ *
+ * The main component that handles data fetching, caching, and chart rendering.
+ * Supports both live data fetching and preview mode with dummy data.
+ *
+ * Data Flow:
+ * 1. Check if preview mode - if yes, use dummy data
+ * 2. Use React Query to fetch/cache data from API
+ * 3. Transform raw data using provided transformData function
+ * 4. Render appropriate chart type with processed data
+ * 5. Handle loading, error, and success states
+ *
+ * @param props - Component props (see BaseChartWidgetProps interface)
+ * @returns React component with chart visualization
+ */
 function BaseChartWidget<T extends Record<string, any>>({
   endpoint,
   title,
