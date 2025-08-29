@@ -18,8 +18,6 @@ const renderCustomPieLabel = (entry: any) => {
   return `${truncateText(name, 15)} (${(percent * 100).toFixed(0)}%)`;
 };
 
-
-
 export type ChartType = 'bar' | 'pie' | 'line';
 export type BarLayout = 'horizontal' | 'vertical';
 
@@ -227,11 +225,11 @@ function BaseChartWidget<T extends Record<string, any>>({
                 ))}
               </Pie>
               <Tooltip 
-                formatter={(value, _name) => [value, 'Count']}
+                formatter={(value, name) => [value, truncateText(name === 'value' ? 'Count' : name, 15)]}
                 labelFormatter={(label) => {
                   const item = processedChartData.find(d => d.displayName === label);
                   const fullName = item?.originalName || label;
-                  return fullName;
+                  return truncateText(fullName, 15);
                 }}
               />
               {showLegend && (
