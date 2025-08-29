@@ -2,6 +2,25 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { useFontSize } from '../context/FontSizeContext';
 import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import {
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
   TotalsChartWidget,
   ConditionsChartWidget,
   SponsorsChartWidget,
@@ -34,11 +53,61 @@ const CHART_INFO = {
   'durations': 'Trial Durations',
 };
 
+// Sortable chart item component
+interface SortableChartItemProps {
+  id: string;
+  children: React.ReactNode;
+}
+
+const SortableChartItem: React.FC<SortableChartItemProps> = ({ id, children }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className="relative">
+      {/* Drag Handle */}
+      <div
+        {...attributes}
+        {...listeners}
+        className="absolute -top-2 left-1/2 transform -translate-x-1/2 w-12 h-4 flex items-center justify-center cursor-move bg-gray-100 hover:bg-gray-200 rounded-b-lg transition-colors duration-200"
+        title="Drag to reorder"
+      >
+        <svg width="20" height="10" viewBox="0 0 20 10" fill="currentColor" className="text-gray-400">
+          <rect x="0" y="0" width="20" height="2" rx="1" />
+          <rect x="0" y="4" width="20" height="2" rx="1" />
+          <rect x="0" y="8" width="20" height="2" rx="1" />
+        </svg>
+      </div>
+      {children}
+    </div>
+  );
+};
+
 const Dashboard: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { fontSize } = useFontSize();
   const [layout, setLayout] = useState<DashboardLayout>({});
   const [showAddChartModal, setShowAddChartModal] = useState(false);
+
+  // Drag and drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   const getFontSizeClasses = () => {
     if (fontSize === 'large') {
@@ -130,6 +199,30 @@ const Dashboard: React.FC = () => {
   // Handle modal close
   const handleCloseModal = () => {
     setShowAddChartModal(false);
+  };
+
+  // Handle drag end
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      const oldIndex = sortedCharts.findIndex((chart) => chart.key === active.id);
+      const newIndex = sortedCharts.findIndex((chart) => chart.key === over.id);
+
+      if (oldIndex !== -1 && newIndex !== -1) {
+        const newSortedCharts = arrayMove(sortedCharts, oldIndex, newIndex);
+
+        // Update layout with new positions
+        const newLayout: DashboardLayout = {};
+        newSortedCharts.forEach((chart, index) => {
+          const chartId = chart.key as string;
+          newLayout[chartId] = index + 1; // 1-based positioning
+        });
+
+        setLayout(newLayout);
+        updateDashboard(id!, newLayout);
+      }
+    }
   };
 
   // Map chartIds to chart components
@@ -249,6 +342,9 @@ const Dashboard: React.FC = () => {
     .map(([chartId]) => chartComponents[chartId])
     .filter(Boolean); // Remove undefined charts
 
+  // Get chart IDs for sortable context
+  const chartIds = Object.keys(layout).sort((a, b) => layout[a] - layout[b]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 py-12 px-6">
       <div className="max-w-7xl mx-auto">
@@ -284,15 +380,30 @@ const Dashboard: React.FC = () => {
           chartInfo={CHART_INFO}
         />
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {sortedCharts.length > 0 ? (
-            sortedCharts
-          ) : (
-            <p className="text-gray-600 text-center col-span-full">
-              No charts in this dashboard. Click "Add Chart" to start customizing.
-            </p>
-          )}
-        </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext items={chartIds} strategy={verticalListSortingStrategy}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {sortedCharts.length > 0 ? (
+                sortedCharts.map((chart, index) => {
+                  const chartId = chartIds[index];
+                  return (
+                    <SortableChartItem key={chartId} id={chartId}>
+                      {chart}
+                    </SortableChartItem>
+                  );
+                })
+              ) : (
+                <p className="text-gray-600 text-center col-span-full">
+                  No charts in this dashboard. Click "Add Charts" to start customizing.
+                </p>
+              )}
+            </div>
+          </SortableContext>
+        </DndContext>
       </div>
     </div>
   );
